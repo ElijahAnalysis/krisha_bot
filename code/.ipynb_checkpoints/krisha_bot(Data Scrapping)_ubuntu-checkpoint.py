@@ -450,6 +450,6 @@ def run_krisha_scraper(url, output_dir=None, max_pages=1, dataset_file=None, csv
 result = run_krisha_scraper(
                              "https://krisha.kz/arenda/kvartiry/almaty/",
                               output_dir="almaty_rentals",
-                              max_pages = 50,
-                              csv_output_path=r"C:\Users\User\Downloads\almaty_apartments.csv"
+                              max_pages = 3,
+                              csv_output_path="/root/krisha_bot/data/regular_scrapping/"
 )
