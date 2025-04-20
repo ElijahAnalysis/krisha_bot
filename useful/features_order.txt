@@ -1,3 +1,0 @@
-'floor', 'total_floors', 'area_sqm', 'rooms', 'price', 'bathroom_code',
-       'furniture_code', 'parking_code', 'security_code',
-       'district_name_code
