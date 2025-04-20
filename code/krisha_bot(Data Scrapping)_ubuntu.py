@@ -451,5 +451,5 @@ result = run_krisha_scraper(
                              "https://krisha.kz/arenda/kvartiry/almaty/",
                               output_dir="almaty_rentals",
                               max_pages = 3,
-                              csv_output_path="/root/krisha_bot/data/regular_scrapping/almaty_rentals.csv"
+                              csv_output_path="/root/krisha_bot/data/regular_scrapping/scrapped/almaty_apartments.csv"
 )
