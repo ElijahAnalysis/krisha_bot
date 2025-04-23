@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import joblib
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ConversationHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes, ConversationHandler, MessageHandler, filters
 import logging
 from datetime import datetime, timedelta
 import random
@@ -18,10 +18,13 @@ logger = logging.getLogger(__name__)
 
 # States for the conversation
 DISTRICT_SELECT, VIEWING_LISTINGS = range(2)
+# States for price estimation
+FLOOR_INPUT, TOTAL_FLOORS_INPUT, AREA_INPUT, ROOMS_INPUT, BATHROOM_INPUT = range(2, 7)
 
 # Path constants
 DATA_PATH = r"C:\Users\User\Desktop\DATA SCIENCE\Github\krisha_bot\data\regular_scrapping\cleaned\almaty_apartments_cleaned.csv"
 MODEL_PATH = r"C:\Users\User\Desktop\DATA SCIENCE\Github\krisha_bot\models\krisha_almaty_rental_kmeans29_pipeline.joblib"
+PRICE_MODEL_PATH = r"C:\Users\User\Desktop\DATA SCIENCE\Github\krisha_bot\models\krisha_almaty_rental_stacking.joblib"
 
 # Bot token - place your token directly here or use environment variables
 TOKEN = "8160649571:AAHRFMGnqO3LcMpDzxKfIFDjitBQ3onhZCE"
@@ -31,6 +34,13 @@ TOKEN = "8160649571:AAHRFMGnqO3LcMpDzxKfIFDjitBQ3onhZCE"
 # Mapping dictionaries for categorical values (reverse mappings)
 BATHROOM_MAPPING = {0: '2 с/у и более', 1: 'неизвестно', 2: 'разделен', 3: 'разделен, совмещен', 
                    4: 'раздельный', 5: 'совмещен', 6: 'совмещенный'}
+
+# Bathroom encoding for price estimation as specified
+BATHROOM_ENCODING = {
+    '2 с/у и более': 0,
+    'разделен': 2,
+    'совмещен': 5
+}
 
 PARKING_MAPPING = {0: 'гараж', 1: 'неизвестно', 2: 'паркинг', 3: 'рядом охраняемая стоянка'}
 
@@ -118,11 +128,12 @@ class DataManager:
     def __init__(self):
         self.data = None
         self.model = None
+        self.price_model = None
         self.last_loaded = None
         self.load_data_and_model()
     
     def load_data_and_model(self):
-        """Load the dataset and machine learning model"""
+        """Load the dataset and machine learning models"""
         try:
             # Check if paths exist
             if not os.path.exists(DATA_PATH):
@@ -133,6 +144,10 @@ class DataManager:
                 logger.error(f"Model file not found at: {MODEL_PATH}")
                 return False
                 
+            if not os.path.exists(PRICE_MODEL_PATH):
+                logger.error(f"Price model file not found at: {PRICE_MODEL_PATH}")
+                return False
+                
             self.data = pd.read_csv(DATA_PATH)
             
             # Add unique IDs to listings if they don't have them
@@ -140,6 +155,7 @@ class DataManager:
                 self.data['id'] = range(1, len(self.data) + 1)
                 
             self.model = joblib.load(MODEL_PATH)
+            self.price_model = joblib.load(PRICE_MODEL_PATH)
             self.last_loaded = datetime.now()
             
             # Assign clusters to listings
@@ -202,6 +218,25 @@ class DataManager:
     def get_district_name(self, district_code):
         """Get district name from code"""
         return DISTRICT_MAPPING.get(district_code, "Неизвестный район")
+    
+    def estimate_price(self, floor, total_floors, area_sqm, rooms, bathroom_code):
+        """Estimate price using the stacking model"""
+        if self.price_model is None:
+            logger.error("Price model not loaded")
+            return None
+        
+        try:
+            # Create input features in correct order
+            input_features = np.array([[floor, total_floors, area_sqm, rooms, bathroom_code]])
+            
+            # Predict price
+            estimated_price = self.price_model.predict(input_features)[0]
+            
+            # Convert to reasonable integer
+            return int(estimated_price)
+        except Exception as e:
+            logger.error(f"Error estimating price: {e}")
+            return None
 
 # Initialize data manager
 data_manager = DataManager()
@@ -219,8 +254,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"🔍 Показываю актуальные предложения по аренде квартир\n"
         f"🏙️ Фильтрую объявления по районам города\n"
         f"🧠 Запоминаю ваши предпочтения и показываю похожие варианты\n"
-        f"🔗 Предоставляю ссылки на понравившиеся объявления\n\n"
+        f"🔗 Предоставляю ссылки на понравившиеся объявления\n"
+        f"💰 Оцениваю ориентировочную стоимость аренды вашей квартиры\n\n"
         f"Чтобы начать поиск квартиры, используйте команду /seerent\n"
+        f"Для оценки стоимости аренды, используйте команду /estimate\n"
         f"Для просмотра всех доступных команд, введите /help"
     )
     
@@ -256,9 +293,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """Send a message when the command /help is issued"""
     await update.message.reply_text(
         "📚 Доступные команды бота:\n\n"
-        "🏠 \n/start - Познакомиться с ботом и узнать его возможности\n"
-        "🔍 \n/seerent - Начать поиск квартир для аренды\n"
-        "❓ \n/help - Показать эту справку\n\n"
+        "🏠 /start - Познакомиться с ботом и узнать его возможности\n"
+        "🔍 /seerent - Начать поиск квартир для аренды\n"
+        "💰 /estimate - Оценить стоимость аренды квартиры\n"
+        "❓ /help - Показать эту справку\n\n"
         "\nБот запоминает ваши предпочтения и показывает похожие квартиры! 😉"
     )
 
@@ -447,13 +485,228 @@ async def handle_listing_response(update: Update, context: ContextTypes.DEFAULT_
     # Default: continue showing listings
     return await show_listing(update, context)
 
+# ---- Price Estimation Functions ----
+
+async def estimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Start the price estimation process"""
+    # Clear any previous user data for estimation
+    if 'estimation_data' in context.user_data:
+        context.user_data['estimation_data'] = {}
+    else:
+        context.user_data['estimation_data'] = {}
+    
+    # Start by asking for floor number
+    await update.message.reply_text(
+        "💰 Давайте оценим примерную стоимость аренды вашей квартиры!\n\n"
+        "Для начала, укажите этаж квартиры (например, 5):"
+    )
+    
+    return FLOOR_INPUT
+
+async def floor_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle floor input and ask for total floors"""
+    try:
+        floor = int(update.message.text.strip())
+        if floor <= 0:
+            await update.message.reply_text("Этаж должен быть положительным числом. Попробуйте снова:")
+            return FLOOR_INPUT
+        
+        # Store the floor in user data
+        context.user_data['estimation_data']['floor'] = floor
+        
+        # Ask for total floors
+        await update.message.reply_text(
+            f"Вы указали {floor} этаж.\n"
+            f"Теперь укажите общее количество этажей в доме (например, 9):"
+        )
+        return TOTAL_FLOORS_INPUT
+    
+    except ValueError:
+        await update.message.reply_text(
+            "Пожалуйста, введите корректное число для этажа (например, 5):"
+        )
+        return FLOOR_INPUT
+
+async def total_floors_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle total floors input and ask for area"""
+    try:
+        total_floors = int(update.message.text.strip())
+        if total_floors <= 0:
+            await update.message.reply_text("Количество этажей должно быть положительным числом. Попробуйте снова:")
+            return TOTAL_FLOORS_INPUT
+        
+        floor = context.user_data['estimation_data']['floor']
+        if floor > total_floors:
+            await update.message.reply_text(
+                f"Этаж квартиры ({floor}) не может быть больше общего количества этажей ({total_floors}).\n"
+                f"Пожалуйста, введите корректное значение:"
+            )
+            return TOTAL_FLOORS_INPUT
+        
+        # Store the total floors in user data
+        context.user_data['estimation_data']['total_floors'] = total_floors
+        
+        # Ask for area
+        await update.message.reply_text(
+            f"Вы указали {total_floors} этажей всего.\n"
+            f"Теперь укажите площадь квартиры в квадратных метрах (например, 45.5):"
+        )
+        return AREA_INPUT
+    
+    except ValueError:
+        await update.message.reply_text(
+            "Пожалуйста, введите корректное число для общего количества этажей (например, 9):"
+        )
+        return TOTAL_FLOORS_INPUT
+
+async def area_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle area input and ask for rooms"""
+    try:
+        area = float(update.message.text.strip().replace(',', '.'))
+        if area <= 0:
+            await update.message.reply_text("Площадь должна быть положительным числом. Попробуйте снова:")
+            return AREA_INPUT
+        
+        # Store the area in user data
+        context.user_data['estimation_data']['area_sqm'] = area
+        
+        # Ask for number of rooms
+        await update.message.reply_text(
+            f"Вы указали площадь {area} м².\n"
+            f"Теперь укажите количество жилых комнат (например, 2):"
+        )
+        return ROOMS_INPUT
+    
+    except ValueError:
+        await update.message.reply_text(
+            "Пожалуйста, введите корректное число для площади (например, 45.5):"
+        )
+        return AREA_INPUT
+
+async def rooms_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle rooms input and ask for bathroom type"""
+    try:
+        rooms = int(update.message.text.strip())
+        if rooms <= 0:
+            await update.message.reply_text("Количество комнат должно быть положительным числом. Попробуйте снова:")
+            return ROOMS_INPUT
+        
+        # Store the rooms in user data
+        context.user_data['estimation_data']['rooms'] = rooms
+        
+        # Create keyboard for bathroom type selection
+        keyboard = [
+            [InlineKeyboardButton("Раздельный", callback_data="bathroom_2")],
+            [InlineKeyboardButton("Совмещенный", callback_data="bathroom_5")],
+            [InlineKeyboardButton("2 санузла или больше", callback_data="bathroom_0")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"Вы указали {rooms} {_format_rooms_word(rooms)}.\n"
+            f"Выберите тип санузла:",
+            reply_markup=reply_markup
+        )
+        return BATHROOM_INPUT
+    
+    except ValueError:
+        await update.message.reply_text(
+            "Пожалуйста, введите корректное число для количества комнат (например, 2):"
+        )
+        return ROOMS_INPUT
+
+def _format_rooms_word(rooms):
+    """Format the word 'room' in Russian based on the number"""
+    if rooms % 10 == 1 and rooms % 100 != 11:
+        return "комнату"
+    elif rooms % 10 in [2, 3, 4] and rooms % 100 not in [12, 13, 14]:
+        return "комнаты"
+    else:
+        return "комнат"
+
+async def bathroom_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle bathroom type selection and show price estimation"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Extract bathroom code from callback data
+    bathroom_code = int(query.data.split('_')[1])
+    
+    # Store the bathroom code in user data
+    context.user_data['estimation_data']['bathroom_code'] = bathroom_code
+    
+    # Get all input values
+    estimation_data = context.user_data['estimation_data']
+    floor = estimation_data['floor']
+    total_floors = estimation_data['total_floors']
+    area = estimation_data['area_sqm']
+    rooms = estimation_data['rooms']
+    
+    # Get bathroom description
+    bathroom_type = BATHROOM_MAPPING.get(bathroom_code, "Неизвестно")
+    
+    # Estimate price
+    estimated_price = data_manager.estimate_price(floor, total_floors, area, rooms, bathroom_code)
+    
+    if estimated_price is None:
+        await query.edit_message_text(
+            "😕 К сожалению, не удалось рассчитать стоимость аренды. Пожалуйста, попробуйте позже."
+        )
+    else:
+        # Format price with spaces for better readability
+        formatted_price = f"{estimated_price:,}".replace(',', ' ')
+        
+        # Create a ±10% price range
+        lower_price = int(estimated_price * 0.9)
+        upper_price = int(estimated_price * 1.1)
+        formatted_lower = f"{lower_price:,}".replace(',', ' ')
+        formatted_upper = f"{upper_price:,}".replace(',', ' ')
+        
+        # Format result message
+        result_message = (
+            f"💰 <b>Оценка стоимости месячной аренды</b>\n\n"
+            f"На основе указанных параметров:\n"
+            f"• Этаж: {floor}/{total_floors}\n"
+            f"• Площадь: {area} м²\n"
+            f"• Комнат: {rooms}\n"
+            f"• Санузел: {bathroom_type}\n\n"
+            f"<b>Предполагаемая стоимость месячной аренды: {formatted_price} тенге/месяц</b>\n"
+            f"<i>(примерный диапазон: {formatted_lower} - {formatted_upper} тенге)</i>\n\n"
+        )
+        
+        # Create keyboard for next actions
+        keyboard = [
+            [InlineKeyboardButton("🔄 Новая оценка", callback_data="new_estimate")]
+                    ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            result_message,
+            reply_markup=reply_markup,
+            parse_mode='HTML'
+        )
+    
+    return ConversationHandler.END
+
+async def estimate_next_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle next action after price estimation"""
+    query = update.callback_query
+    await query.answer()
+    
+    # Only handle new_estimate now
+    await query.edit_message_text(
+        "💰 Давайте оценим стоимость аренды снова!\n\n"
+        "Укажите этаж квартиры (например, 5):"
+    )
+    return FLOOR_INPUT
+
 def main() -> None:
     """Start the bot."""
     # Create the Application with the token
     application = ApplicationBuilder().token(TOKEN).build()
     
-    # Create conversation handler
-    conv_handler = ConversationHandler(
+    # Create conversation handler for rental listings
+    rental_conv_handler = ConversationHandler(
         entry_points=[
             CommandHandler("seerent", seerent_command)
         ],
@@ -468,9 +721,37 @@ def main() -> None:
         fallbacks=[CommandHandler("start", start)],
     )
     
-    application.add_handler(conv_handler)
+    # Create conversation handler for price estimation
+    estimate_conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("estimate", estimate_command)
+        ],
+        states={
+            FLOOR_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, floor_input)
+            ],
+            TOTAL_FLOORS_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, total_floors_input)
+            ],
+            AREA_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, area_input)
+            ],
+            ROOMS_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, rooms_input)
+            ],
+            BATHROOM_INPUT: [
+                CallbackQueryHandler(bathroom_input, pattern=r"^bathroom_\d+$")
+            ],
+        },
+        fallbacks=[CommandHandler("start", start)],
+    )
+    
+    # Add handlers to application
+    application.add_handler(rental_conv_handler)
+    application.add_handler(estimate_conv_handler)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CallbackQueryHandler(estimate_next_action, pattern=r"^(start_browsing|new_estimate)$"))
     
     # Start the Bot
     try:

@@ -1,0 +1,1 @@
+'floor', 'total_floors', 'area_sqm', 'rooms', 'bathroom_code'
