@@ -241,6 +241,21 @@ class DataManager:
 # Initialize data manager
 data_manager = DataManager()
 
+# Function to handle stop button action
+async def handle_stop(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle the stop button press"""
+    query = update.callback_query
+    await query.answer()
+    
+    await query.edit_message_text(
+        "✅ Операция прервана. Вы можете использовать команды:\n"
+        "/seerent - для поиска квартир\n"
+        "/estimate - для оценки стоимости\n"
+        "/help - для получения справки"
+    )
+    
+    return ConversationHandler.END
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start the conversation and provide bot description"""
     user = update.effective_user
@@ -255,7 +270,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"🏙️ Фильтрую объявления по районам города\n"
         f"🧠 Запоминаю ваши предпочтения и показываю похожие варианты\n"
         f"🔗 Предоставляю ссылки на понравившиеся объявления\n"
-        f"💰 Оцениваю ориентировочную стоимость аренды вашей квартиры, 5 простых вопросов\n\n"
+        f"💰 Оцениваю ориентировочную стоимость аренды вашей квартиры, 5 простых вопросов!\n\n"
         f"Чтобы начать поиск квартиры, используйте команду /seerent\n"
         f"Для оценки стоимости аренды, используйте команду /estimate\n"
         f"Для просмотра всех доступных команд, введите /help"
@@ -273,6 +288,9 @@ async def show_district_selection(update: Update, context: ContextTypes.DEFAULT_
         if (i + 1) % 2 == 0 or i == len(DISTRICT_CHOICES) - 1:
             keyboard.append(row)
             row = []
+    
+    # Add a Stop button
+    keyboard.append([InlineKeyboardButton("❌ Отменить", callback_data="stop")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -396,13 +414,14 @@ async def show_listing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     unique_indicator = f"\n\n<i>Показано: {datetime.now().strftime('%H:%M:%S')}</i>"
     listing_text += unique_indicator
     
-    # Create keyboard with like/dislike buttons
+    # Create keyboard with like/dislike buttons and stop button
     keyboard = [
         [
             InlineKeyboardButton("👎 Не нравится", callback_data="dislike"),
             InlineKeyboardButton("👍 Нравится, показать ссылку", callback_data="like")
         ],
-        [InlineKeyboardButton("🔄 Изменить район", callback_data="change_district")]
+        [InlineKeyboardButton("🔄 Изменить район", callback_data="change_district")],
+        [InlineKeyboardButton("❌ Отменить поиск", callback_data="stop")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -438,6 +457,10 @@ async def handle_listing_response(update: Update, context: ContextTypes.DEFAULT_
     
     user_response = query.data
     
+    if user_response == "stop":
+        # User wants to stop the process
+        return await handle_stop(update, context)
+    
     if user_response == "change_district":
         # User wants to change district
         return await show_district_selection(update, context)
@@ -462,7 +485,8 @@ async def handle_listing_response(update: Update, context: ContextTypes.DEFAULT_
                     f"🎉 Отлично! Вот ссылка на это объявление: {listing_url}\n\n"
                     f"Теперь я буду показывать вам похожие квартиры. Хотите продолжить просмотр?",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✨ Да, показать еще", callback_data="show_more")]
+                        [InlineKeyboardButton("✨ Да, показать еще", callback_data="show_more")],
+                        [InlineKeyboardButton("❌ Отменить поиск", callback_data="stop")]
                     ])
                 )
             except Exception as e:
@@ -472,7 +496,8 @@ async def handle_listing_response(update: Update, context: ContextTypes.DEFAULT_
                     f"🎉 Отлично! Вот ссылка на это объявление: {listing_url}\n\n"
                     f"Теперь я буду показывать вам похожие квартиры. Хотите продолжить просмотр?",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✨ Да, показать еще", callback_data="show_more")]
+                        [InlineKeyboardButton("✨ Да, показать еще", callback_data="show_more")],
+                        [InlineKeyboardButton("❌ Отменить поиск", callback_data="stop")]
                     ])
                 )
             
@@ -496,12 +521,27 @@ async def estimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         context.user_data['estimation_data'] = {}
     
     # Start by asking for floor number
-    await update.message.reply_text(
+    message = await update.message.reply_text(
         "💰 Давайте оценим примерную стоимость аренды вашей квартиры!\n\n"
-        "Для начала, укажите этаж квартиры (например, 5):"
+        "Для начала, укажите этаж квартиры (например, 5):\n\n"
+        "Чтобы отменить оценку, нажмите /cancel"
     )
     
+    # Store the message ID for potential cancellation
+    context.user_data['current_message_id'] = message.message_id
+    
     return FLOOR_INPUT
+
+# Add a cancel handler for text commands during estimation
+async def cancel_estimation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Cancel the estimation process"""
+    await update.message.reply_text(
+        "✅ Оценка стоимости отменена. Вы можете использовать команды:\n"
+        "/seerent - для поиска квартир\n"
+        "/estimate - для оценки стоимости\n"
+        "/help - для получения справки"
+    )
+    return ConversationHandler.END
 
 async def floor_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle floor input and ask for total floors"""
@@ -517,7 +557,8 @@ async def floor_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         # Ask for total floors
         await update.message.reply_text(
             f"Вы указали {floor} этаж.\n"
-            f"Теперь укажите общее количество этажей в доме (например, 9):"
+            f"Теперь укажите общее количество этажей в доме (например, 9):\n\n"
+            f"Чтобы отменить оценку, нажмите /cancel"
         )
         return TOTAL_FLOORS_INPUT
     
@@ -549,7 +590,8 @@ async def total_floors_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Ask for area
         await update.message.reply_text(
             f"Вы указали {total_floors} этажей всего.\n"
-            f"Теперь укажите площадь квартиры в квадратных метрах (например, 45.5):"
+            f"Теперь укажите площадь квартиры в квадратных метрах (например, 45.5):\n\n"
+            f"Чтобы отменить оценку, нажмите /cancel"
         )
         return AREA_INPUT
     
@@ -573,7 +615,8 @@ async def area_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         # Ask for number of rooms
         await update.message.reply_text(
             f"Вы указали площадь {area} м².\n"
-            f"Теперь укажите количество жилых комнат (например, 2):"
+            f"Теперь укажите количество жилых комнат (например, 2):\n\n"
+            f"Чтобы отменить оценку, нажмите /cancel"
         )
         return ROOMS_INPUT
     
@@ -594,11 +637,12 @@ async def rooms_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
         # Store the rooms in user data
         context.user_data['estimation_data']['rooms'] = rooms
         
-        # Create keyboard for bathroom type selection
+        # Create keyboard for bathroom type selection with stop button
         keyboard = [
             [InlineKeyboardButton("Раздельный", callback_data="bathroom_2")],
             [InlineKeyboardButton("Совмещенный", callback_data="bathroom_5")],
-            [InlineKeyboardButton("2 санузла или больше", callback_data="bathroom_0")]
+            [InlineKeyboardButton("2 санузла или больше", callback_data="bathroom_0")],
+            [InlineKeyboardButton("❌ Отменить оценку", callback_data="stop")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -611,15 +655,15 @@ async def rooms_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
     
     except ValueError:
         await update.message.reply_text(
-            "Пожалуйста, введите корректное число для количества комнат (например, 2):"
+            "Пожалуйста, введите корректное число комнат (например, 2):"
         )
         return ROOMS_INPUT
 
-def _format_rooms_word(rooms):
-    """Format the word 'room' in Russian based on the number"""
-    if rooms % 10 == 1 and rooms % 100 != 11:
+def _format_rooms_word(count):
+    """Format the word 'room' based on count in Russian"""
+    if count % 10 == 1 and count % 100 != 11:
         return "комнату"
-    elif rooms % 10 in [2, 3, 4] and rooms % 100 not in [12, 13, 14]:
+    elif 2 <= count % 10 <= 4 and (count % 100 < 10 or count % 100 >= 20):
         return "комнаты"
     else:
         return "комнат"
@@ -629,103 +673,116 @@ async def bathroom_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     query = update.callback_query
     await query.answer()
     
+    if query.data == "stop":
+        return await handle_stop(update, context)
+    
     # Extract bathroom code from callback data
     bathroom_code = int(query.data.split('_')[1])
     
-    # Store the bathroom code in user data
+    # Store the bathroom type in user data
     context.user_data['estimation_data']['bathroom_code'] = bathroom_code
     
-    # Get all input values
-    estimation_data = context.user_data['estimation_data']
-    floor = estimation_data['floor']
-    total_floors = estimation_data['total_floors']
-    area = estimation_data['area_sqm']
-    rooms = estimation_data['rooms']
+    # Get all estimation data
+    data = context.user_data['estimation_data']
+    floor = data['floor']
+    total_floors = data['total_floors']
+    area_sqm = data['area_sqm']
+    rooms = data['rooms']
     
-    # Get bathroom description
-    bathroom_type = BATHROOM_MAPPING.get(bathroom_code, "Неизвестно")
+    # Get bathroom description for display
+    bathroom_description = BATHROOM_MAPPING.get(bathroom_code, "Неизвестно")
     
-    # Estimate price
-    estimated_price = data_manager.estimate_price(floor, total_floors, area, rooms, bathroom_code)
+    # Estimate the price
+    estimated_price = data_manager.estimate_price(floor, total_floors, area_sqm, rooms, bathroom_code)
     
     if estimated_price is None:
         await query.edit_message_text(
-            "😕 К сожалению, не удалось рассчитать стоимость аренды. Пожалуйста, попробуйте позже."
+            "😕 К сожалению, не удалось оценить стоимость с указанными параметрами. "
+            "Попробуйте другие значения или воспользуйтесь командой /estimate снова."
         )
     else:
-        # Format price with spaces for better readability
-        formatted_price = f"{estimated_price:,}".replace(',', ' ')
-        
-        # Create a ±10% price range
+        # Calculate price range (±10%)
         lower_price = int(estimated_price * 0.9)
         upper_price = int(estimated_price * 1.1)
-        formatted_lower = f"{lower_price:,}".replace(',', ' ')
-        formatted_upper = f"{upper_price:,}".replace(',', ' ')
         
-        # Format result message
-        result_message = (
-            f"💰 <b>Оценка стоимости месячной аренды</b>\n\n"
-            f"На основе указанных параметров:\n"
-            f"• Этаж: {floor}/{total_floors}\n"
-            f"• Площадь: {area} м²\n"
-            f"• Комнат: {rooms}\n"
-            f"• Санузел: {bathroom_type}\n\n"
-            f"<b>Предполагаемая стоимость месячной аренды: {formatted_price} тенге/месяц</b>\n"
-            f"<i>(примерный диапазон: {formatted_lower} - {formatted_upper} тенге)</i>\n\n"
+        # Format prices with spaces
+        lower_price_str = f"{lower_price:,}".replace(',', ' ')
+        upper_price_str = f"{upper_price:,}".replace(',', ' ')
+        price_str = f"{estimated_price:,}".replace(',', ' ')
+        
+        # Prepare result message with price interval
+        message = (
+            f"💰 <b>Оценка стоимости аренды</b>\n\n"
+            f"На основе введенных данных:\n"
+            f"🏢 Этаж: {floor}/{total_floors}\n"
+            f"📐 Площадь: {area_sqm} м²\n"
+            f"🚪 Комнат: {rooms}\n"
+            f"🚽 Санузел: {bathroom_description}\n\n"
+            f"<b>Примерная стоимость аренды:</b> {lower_price_str} - {upper_price_str} тенге в месяц\n"
+            f"<i>(в среднем {price_str} тенге)</i>\n"
         )
         
         # Create keyboard for next actions
         keyboard = [
-            [InlineKeyboardButton("🔄 Новая оценка", callback_data="new_estimate")]
-                    ]
+            [InlineKeyboardButton("🔄 Новая оценка", callback_data="new_estimate")],
+            [InlineKeyboardButton("❌ Закончить", callback_data="stop")]
+        ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            result_message,
+            text=message,
             reply_markup=reply_markup,
             parse_mode='HTML'
         )
     
     return ConversationHandler.END
 
-async def estimate_next_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle next action after price estimation"""
+async def handle_post_estimate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle user's decision after price estimation"""
     query = update.callback_query
     await query.answer()
     
-    # Only handle new_estimate now
-    await query.edit_message_text(
-        "💰 Давайте оценим стоимость аренды снова!\n\n"
-        "Укажите этаж квартиры (например, 5):"
-    )
-    return FLOOR_INPUT
+    if query.data == "new_estimate":
+        # User wants a new estimate
+        await query.edit_message_text("Начинаем новую оценку...")
+        # We need to create a new message since we can't transition back to text input from a callback
+        await query.message.reply_text(
+            "💰 Давайте оценим примерную стоимость аренды вашей квартиры!\n\n"
+            "Для начала, укажите этаж квартиры (например, 5):\n\n"
+            "Чтобы отменить оценку, нажмите /cancel"
+        )
+        return FLOOR_INPUT
+    
+    elif query.data == "stop":
+        # User wants to stop
+        return await handle_stop(update, context)
+    
+    return ConversationHandler.END
 
 def main() -> None:
     """Start the bot."""
-    # Create the Application with the token
+    # Create the Application and pass it your bot's token
     application = ApplicationBuilder().token(TOKEN).build()
     
-    # Create conversation handler for rental listings
-    rental_conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("seerent", seerent_command)
-        ],
+    # Set up conversation handlers
+    # Apartment viewing conversation
+    apartment_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("seerent", seerent_command)],
         states={
             DISTRICT_SELECT: [
-                CallbackQueryHandler(select_district, pattern=r"^district_\d+$")
+                CallbackQueryHandler(select_district, pattern=r"^district_\d+$"),
+                CallbackQueryHandler(handle_stop, pattern="^stop$")
             ],
             VIEWING_LISTINGS: [
                 CallbackQueryHandler(handle_listing_response)
             ],
         },
-        fallbacks=[CommandHandler("start", start)],
+        fallbacks=[CommandHandler("cancel", handle_stop)]
     )
     
-    # Create conversation handler for price estimation
-    estimate_conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("estimate", estimate_command)
-        ],
+    # Price estimation conversation
+    estimation_conv_handler = ConversationHandler(
+        entry_points=[CommandHandler("estimate", estimate_command)],
         states={
             FLOOR_INPUT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, floor_input)
@@ -740,25 +797,25 @@ def main() -> None:
                 MessageHandler(filters.TEXT & ~filters.COMMAND, rooms_input)
             ],
             BATHROOM_INPUT: [
-                CallbackQueryHandler(bathroom_input, pattern=r"^bathroom_\d+$")
+                CallbackQueryHandler(bathroom_input)
             ],
         },
-        fallbacks=[CommandHandler("start", start)],
+        fallbacks=[CommandHandler("cancel", cancel_estimation)]
     )
     
-    # Add handlers to application
-    application.add_handler(rental_conv_handler)
-    application.add_handler(estimate_conv_handler)
+    # Register handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CallbackQueryHandler(estimate_next_action, pattern=r"^(start_browsing|new_estimate)$"))
+    application.add_handler(apartment_conv_handler)
+    application.add_handler(estimation_conv_handler)
+    application.add_handler(CallbackQueryHandler(handle_post_estimate, pattern="^(start_search|new_estimate|stop)$"))
     
+    # Log all errors
+    application.add_error_handler(lambda update, context: logger.error(f"Update {update} caused error {context.error}"))
+    
+    logger.info("Starting bot...")
     # Start the Bot
-    try:
-        logger.info("Starting bot...")
-        application.run_polling()
-    except Exception as e:
-        logger.error(f"Error starting bot: {e}")
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
