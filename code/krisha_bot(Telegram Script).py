@@ -171,19 +171,15 @@ class DataManager:
             return False
     
     def check_and_reload(self):
-        """Check if data needs to be reloaded (every 2 days at 07:00)"""
+        """Check if data needs to be reloaded (every day at 07:00)"""
         now = datetime.now()
     
         # Check if it's 07:00 (with a 5-minute window)
         is_reload_time = now.hour == 7 and 0 <= now.minute < 5
     
-        days_passed = 0
-        if self.last_loaded is not None:
-            days_passed = (now - self.last_loaded).days
-    
-        # Reload if never loaded or if 2+ days passed and it's reload time
-        if self.last_loaded is None or (days_passed >= 2 and is_reload_time):
-            logger.info("Reloading data and model at scheduled time (every 2 days at 07:00)...")
+        # Reload only at the specified time
+        if is_reload_time:
+            logger.info("Reloading data and model at scheduled time (every day at 07:00)...")
             self.load_data_and_model()
             self.last_loaded = now
 
