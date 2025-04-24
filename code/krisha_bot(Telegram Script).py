@@ -171,25 +171,22 @@ class DataManager:
             return False
     
     def check_and_reload(self):
-        """Check if data needs to be reloaded (every 3 days at 21:00)"""
+        """Check if data needs to be reloaded (every 3 days at 00:50)"""
         now = datetime.now()
-        
-        # Check if it's 9:00 PM (21:00)
-        is_reload_hour = now.hour == 21 and now.minute < 5  # Small window to ensure it runs
-        
-        # Calculate days since last reload
+    
+        # Check if it's 00:50 (with a 5-minute window)
+        is_reload_time = now.hour == 0 and 50 <= now.minute < 55
+    
         days_passed = 0
         if self.last_loaded is not None:
             days_passed = (now - self.last_loaded).days
-        
-        # Reload if:
-        # 1. Never loaded before, or
-        # 2. It's been at least 3 days AND it's currently the reload hour
-        if self.last_loaded is None or (days_passed >= 3 and is_reload_hour):
-            logger.info("Reloading data and model at scheduled time (every 3 days at 21:00)...")
+    
+        # Reload if never loaded or if 3+ days passed and it's reload time
+        if self.last_loaded is None or (days_passed >= 3 and is_reload_time):
+            logger.info("Reloading data and model at scheduled time (every 3 days at 00:50)...")
             self.load_data_and_model()
             self.last_loaded = now
-    
+        
     def get_random_listing_from_district(self, district_code, preferred_cluster=None):
         """Get a random listing from the specified district and optionally from preferred cluster"""
         self.check_and_reload()
