@@ -740,7 +740,7 @@ async def bathroom_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         price_min_str = f"{price_min:,}".replace(',', ' ')
         price_max_str = f"{price_max:,}".replace(',', ' ')
         
-        # Create message with summary and estimation
+        # Create message with summary and estimation - removed the question about continuing to search
         message = (
             "📊 <b>Результаты оценки стоимости аренды:</b>\n\n"
             f"<b>Параметры квартиры:</b>\n"
@@ -750,13 +750,11 @@ async def bathroom_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             f"• Санузел: {bathroom_name}\n\n"
             f"<b>Ориентировочная стоимость аренды:</b>\n"
             f"<b>{price_str} тенге</b> в месяц\n\n"
-            f"<i>Диапазон цен: {price_min_str} - {price_max_str} тенге</i>\n\n"
-            f"Хотите продолжить поиск квартир по этим параметрам?"
+            f"<i>Диапазон цен: {price_min_str} - {price_max_str} тенге</i>"
         )
         
-        # Offer to search for apartments with these parameters
+        # Offer only new estimation or exit - removed the search apartments option
         keyboard = [
-            [InlineKeyboardButton("🔍 Искать квартиры", callback_data="search_apartments")],
             [InlineKeyboardButton("🔄 Новая оценка", callback_data="new_estimate")],
             [InlineKeyboardButton("❌ Завершить", callback_data="stop")]
         ]
@@ -777,12 +775,7 @@ async def handle_post_estimation(update: Update, context: ContextTypes.DEFAULT_T
     
     user_choice = query.data
     
-    if user_choice == "search_apartments":
-        # Start the apartment search process
-        await query.edit_message_text("🔍 Начинаем поиск квартир по вашим параметрам...")
-        return await seerent_command(update, context)
-    
-    elif user_choice == "new_estimate":
+    if user_choice == "new_estimate":
         # Start a new estimation
         await query.edit_message_text("🔄 Начинаем новую оценку стоимости...")
         return await estimate_command(update, context)
@@ -829,7 +822,7 @@ def main() -> None:
     # Add post-estimation handler
     post_estimation_handler = CallbackQueryHandler(
         handle_post_estimation, 
-        pattern=r"^(search_apartments|new_estimate|stop)$"
+        pattern=r"^(new_estimate|stop)$"  # Removed search_apartments option
     )
     
     # Add handlers to the application
