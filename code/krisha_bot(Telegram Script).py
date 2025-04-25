@@ -27,7 +27,7 @@ MODEL_PATH = r"C:\Users\User\Desktop\DATA SCIENCE\Github\krisha_bot\models\krish
 PRICE_MODEL_PATH = r"C:\Users\User\Desktop\DATA SCIENCE\Github\krisha_bot\models\krisha_almaty_rental_stacking.joblib"
 
 # Bot token - place your token directly here or use environment variables
-TOKEN = "8160649571:AAHRFMGnqO3LcMpDzxKfIFDjitBQ3onhZCE"
+TOKEN = "your_token"
 # Alternatively, use environment variables (more secure):
 # TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
