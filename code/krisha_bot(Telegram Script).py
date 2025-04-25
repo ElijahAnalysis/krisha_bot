@@ -487,8 +487,8 @@ async def handle_listing_response(update: Update, context: ContextTypes.DEFAULT_
         dislike_counter = context.user_data.get('dislike_counter', 0) + 1
         context.user_data['dislike_counter'] = dislike_counter
         
-        # If user disliked 5 times in a row, reset preferred cluster
-        if dislike_counter >= 5 and 'preferred_cluster' in context.user_data:
+        # If user disliked 10 times in a row, reset preferred cluster
+        if dislike_counter >= 10 and 'preferred_cluster' in context.user_data:
             del context.user_data['preferred_cluster']
             context.user_data['dislike_counter'] = 0  # Reset counter
             
