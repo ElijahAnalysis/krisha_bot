@@ -495,7 +495,7 @@ async def handle_listing_response(update: Update, context: ContextTypes.DEFAULT_
             # Inform user that we're showing different recommendations now
             try:
                 await query.edit_message_text(
-                    "🔄 Понятно, похоже эти варианты вам не подходят. Сейчас покажу другие предложения...",
+                    "🔄 Понял, видимо эти варианты вам не подходят. Сейчас покажу другие предложения...",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("✨ Показать другие варианты", callback_data="show_more")]
                     ])
@@ -522,26 +522,21 @@ async def handle_listing_response(update: Update, context: ContextTypes.DEFAULT_
             # Show the URL to the user
             listing_url = current_listing.get('url', 'URL не найден')
             
-            try:
-                await query.edit_message_text(
-                    f"🎉 Отлично! Вот ссылка на это объявление: {listing_url}\n\n"
-                    f"Теперь я буду показывать вам похожие квартиры. Хотите продолжить просмотр?",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✨ Да, показать еще", callback_data="show_more")],
-                        [InlineKeyboardButton("❌ Отменить поиск", callback_data="stop")]
-                    ])
-                )
-            except Exception as e:
-                logger.error(f"Error showing URL: {e}")
-                # If editing fails, send a new message
-                await query.message.reply_text(
-                    f"🎉 Отлично! Вот ссылка на это объявление: {listing_url}\n\n"
-                    f"Теперь я буду показывать вам похожие квартиры. Хотите продолжить просмотр?",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✨ Да, показать еще", callback_data="show_more")],
-                        [InlineKeyboardButton("❌ Отменить поиск", callback_data="stop")]
-                    ])
-                )
+            # Send a new message with the link instead of editing the current message
+            # This ensures the link remains in chat history
+            await query.message.reply_text(
+                f"🎉 Супер! Ловите ссылку на это объявление: {listing_url}\n\n"
+                f"Теперь я буду показывать вам похожие обьявления."
+            )
+            
+            # Then ask if they want to continue viewing
+            await query.edit_message_text(
+                f"Продолжим просмотр?",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✨ Да, показать еще", callback_data="show_more")],
+                    [InlineKeyboardButton("❌ Отменить поиск", callback_data="stop")]
+                ])
+            )
             
             return VIEWING_LISTINGS
     
