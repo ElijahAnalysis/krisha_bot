@@ -31,6 +31,9 @@ TOKEN = "your_token"
 # Alternatively, use environment variables (more secure):
 # TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
+# User preferences storage
+user_preferences = {}  # Will store user_id -> {district, preferred_cluster}
+
 # Mapping dictionaries for categorical values (reverse mappings)
 BATHROOM_MAPPING = {0: '2 с/у и более', 1: 'неизвестно', 2: 'разделен', 3: 'разделен, совмещен', 
                    4: 'раздельный', 5: 'совмещен', 6: 'совмещенный'}
@@ -273,7 +276,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         f"🏙️ Фильтрую объявления по районам города\n"
         f"🧠 Запоминаю ваши предпочтения и показываю похожие варианты\n"
         f"🔗 Предоставляю ссылки на понравившиеся объявления\n"
-        f"💰 Оцениваю ориентировочную стоимость аренды вашей квартиры, 5 простых вопросов!\n\n"
+        f"💰 Оцениваю ориентировочную стоимость аренды вашей квартиры, 5 простых вопросов!\n"
+        f"🔔 Отправляю уведомления о новых интересных предложениях\n\n"
         f"Чтобы начать поиск квартиры, используйте команду /seerent\n"
         f"Для оценки стоимости аренды, используйте команду /estimate\n"
         f"Для просмотра всех доступных команд, введите /help"
@@ -317,6 +321,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "🏠 /start - Познакомиться с ботом и узнать его возможности\n"
         "🔍 /seerent - Начать поиск квартир для аренды\n"
         "💰 /estimate - Оценить стоимость аренды квартиры за 5 простых вопросов\n"
+        "🔔 /notifications - Управление уведомлениями о новых предложениях\n"
         "❓ /help - Показать эту справку\n\n"
         "\nБот запоминает ваши предпочтения и показывает похожие квартиры! 😉"
     )
@@ -461,12 +466,169 @@ async def show_listing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     
     return VIEWING_LISTINGS
 
+# New function to schedule notifications
+async def schedule_listing_notification(context: ContextTypes.DEFAULT_TYPE, user_id, district_code, cluster):
+    """Schedule a notification with a listing from the preferred cluster"""
+    # Calculate random time within the next 24 hours
+    # Random between 3 and 24 hours to avoid immediate notifications
+    hours_delay = random.randint(3, 24)
+    minutes_delay = random.randint(0, 59)
+    seconds_delay = random.randint(0, 59)
+    
+    notification_time = datetime.now() + timedelta(
+        hours=hours_delay, 
+        minutes=minutes_delay,
+        seconds=seconds_delay
+    )
+    
+    # Store the job in user preferences
+    if user_id not in user_preferences:
+        user_preferences[user_id] = {}
+    
+    user_preferences[user_id]['district'] = district_code
+    user_preferences[user_id]['preferred_cluster'] = cluster
+    user_preferences[user_id]['notification_scheduled'] = True
+    
+    logger.info(
+        f"Scheduled notification for user {user_id} at {notification_time} "
+        f"(district: {district_code}, cluster: {cluster})"
+    )
+    
+    # Schedule the job to run at the calculated time
+    context.job_queue.run_once(
+        send_listing_notification,
+        notification_time - datetime.now(),
+        data={'user_id': user_id, 'district_code': district_code, 'cluster': cluster},
+        name=f"notification_{user_id}"
+    )
+
+# Function to send a notification with a listing
+async def send_listing_notification(context: ContextTypes.DEFAULT_TYPE):
+    """Send a notification with a listing from the preferred cluster"""
+    job_data = context.job.data
+    user_id = job_data['user_id']
+    district_code = job_data['district_code']
+    cluster = job_data['cluster']
+    
+    # Get a random listing from the preferred cluster
+    listing = data_manager.get_random_listing_from_district(district_code, cluster)
+    
+    if listing is not None:
+        # Format the listing details
+        listing_text = format_listing_details(listing)
+        district_name = data_manager.get_district_name(district_code)
+        
+        # Add notification header
+        message = (
+            f"🔔 <b>Новое интересное предложение!</b>\n\n"
+            f"Я нашел для вас подходящую квартиру в районе {district_name.split('Алматы, ')[-1] if 'Алматы, ' in district_name else district_name}:\n\n"
+            f"{listing_text}"
+        )
+        
+        # Create keyboard with the link and continue buttons
+        keyboard = [
+            [InlineKeyboardButton("🔗 Посмотреть объявление", url=listing['url'])],
+            [InlineKeyboardButton("🔍 Продолжить поиск", callback_data="continue_search")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        try:
+            # Send the notification
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=message,
+                reply_markup=reply_markup,
+                parse_mode='HTML'
+            )
+            logger.info(f"Sent notification with listing to user {user_id}")
+            
+            # Schedule the next notification (recursively continue the notifications)
+            # Schedule it with a different delay for variety
+            await schedule_listing_notification(context, user_id, district_code, cluster)
+            
+        except Exception as e:
+            logger.error(f"Error sending notification to user {user_id}: {e}")
+            # If the notification fails (e.g., user blocked the bot), remove from preferences
+            if user_id in user_preferences:
+                user_preferences[user_id]['notification_scheduled'] = False
+    else:
+        logger.error(f"No listings found for notification to user {user_id} (district: {district_code}, cluster: {cluster})")
+
+# Handler for the continue_search button from notifications
+async def handle_continue_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle continue search button from notifications"""
+    query = update.callback_query
+    await query.answer()
+    
+    user_id = update.effective_user.id
+    
+    # Check if user has preferences stored
+    if user_id in user_preferences:
+        district_code = user_preferences[user_id].get('district')
+        preferred_cluster = user_preferences[user_id].get('preferred_cluster')
+        
+        # Store in context for the current session
+        context.user_data['district'] = district_code
+        context.user_data['preferred_cluster'] = preferred_cluster
+        context.user_data['dislike_counter'] = 0
+        
+        # Continue to show listings
+        await query.edit_message_text("Продолжаем поиск с вашими предпочтениями...")
+        
+        # Show a listing based on preferences
+        listing = data_manager.get_random_listing_from_district(district_code, preferred_cluster)
+        
+        if listing is not None:
+            # Store the current listing
+            context.user_data['current_listing'] = listing.to_dict()
+            
+            # Format and show the listing
+            listing_text = format_listing_details(listing)
+            
+            # Add timestamp
+            unique_indicator = f"\n\n<i>Показано: {datetime.now().strftime('%H:%M:%S')}</i>"
+            listing_text += unique_indicator
+            
+            # Create keyboard
+            keyboard = [
+                [
+                    InlineKeyboardButton("👎 Не нравится", callback_data="dislike"),
+                    InlineKeyboardButton("👍 Нравится, показать ссылку", callback_data="like")
+                ],
+                [InlineKeyboardButton("🔄 Изменить район", callback_data="change_district")],
+                [InlineKeyboardButton("❌ Отменить поиск", callback_data="stop")]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=listing_text,
+                reply_markup=reply_markup,
+                parse_mode='HTML'
+            )
+            
+            return VIEWING_LISTINGS
+        else:
+            # No listings found
+            await query.edit_message_text(
+                "😕 К сожалению, не найдено подходящих объявлений. "
+                "Попробуйте изменить параметры поиска с помощью команды /seerent"
+            )
+            return ConversationHandler.END
+    else:
+        # No preferences stored
+        await query.edit_message_text(
+            "Для продолжения поиска начните с команды /seerent"
+        )
+        return ConversationHandler.END
+
 async def handle_listing_response(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle user's response to a listing"""
     query = update.callback_query
     await query.answer()
     
     user_response = query.data
+    user_id = update.effective_user.id
     
     if user_response == "stop":
         # User wants to stop the process
@@ -497,261 +659,284 @@ async def handle_listing_response(update: Update, context: ContextTypes.DEFAULT_
                 await query.edit_message_text(
                     "🔄 Понял, видимо эти варианты вам не подходят. Сейчас покажу другие предложения...",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✨ Показать другие варианты", callback_data="show_more")]
+                        [InlineKeyboardButton("👍 Хорошо", callback_data="acknowledge_change")]
+                    ])
+                )
+                await asyncio.sleep(2)  # Brief pause
+            except Exception as e:
+                logger.error(f"Error showing change notification: {e}")
+    
+    elif user_response == "like":
+        # User liked this listing
+        # Store their preference
+        if 'current_listing' in context.user_data:
+            current_listing = context.user_data['current_listing']
+            if 'cluster' in current_listing:
+                # Store the preferred cluster for this user
+                preferred_cluster = current_listing['cluster']
+                context.user_data['preferred_cluster'] = preferred_cluster
+                
+                # Store in global preferences dictionary for notifications
+                if user_id not in user_preferences:
+                    user_preferences[user_id] = {}
+                
+                user_preferences[user_id]['district'] = context.user_data.get('district')
+                user_preferences[user_id]['preferred_cluster'] = preferred_cluster
+                
+                # Reset dislike counter when user likes a listing
+                context.user_data['dislike_counter'] = 0
+                
+                # Schedule notification if not already scheduled
+                if not user_preferences[user_id].get('notification_scheduled', False):
+                    await schedule_listing_notification(
+                        context, 
+                        user_id, 
+                        context.user_data.get('district'), 
+                        preferred_cluster
+                    )
+            
+            # Send link to the listing
+            if 'url' in current_listing and current_listing['url']:
+                keyboard = [
+                    [InlineKeyboardButton("🔗 Перейти к объявлению", url=current_listing['url'])],
+                    [InlineKeyboardButton("🔍 Продолжить поиск", callback_data="continue")],
+                    [InlineKeyboardButton("❌ Завершить поиск", callback_data="stop")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await query.edit_message_text(
+                    "👍 Отлично! Вот ссылка на это объявление:",
+                    reply_markup=reply_markup
+                )
+                return VIEWING_LISTINGS
+            else:
+                await query.edit_message_text(
+                    "😕 К сожалению, у этого объявления нет доступной ссылки. Хотите продолжить поиск?",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔍 Продолжить поиск", callback_data="continue")],
+                        [InlineKeyboardButton("❌ Завершить поиск", callback_data="stop")]
                     ])
                 )
                 return VIEWING_LISTINGS
-            except Exception as e:
-                logger.error(f"Error showing reset message: {e}")
-                # Continue to next listing if edit fails
-        
-        # Show another listing
+    
+    elif user_response == "continue" or user_response == "acknowledge_change":
+        # User wants to continue viewing listings
         return await show_listing(update, context)
     
-    elif user_response == "like":
-        # User liked the listing
-        current_listing = context.user_data.get('current_listing')
-        
-        if current_listing:
-            # Record the cluster the user liked
-            context.user_data['preferred_cluster'] = current_listing.get('cluster')
-            
-            # Reset dislike counter when user likes a listing
-            context.user_data['dislike_counter'] = 0
-            
-            # Show the URL to the user
-            listing_url = current_listing.get('url', 'URL не найден')
-            
-            # Send a new message with the link instead of editing the current message
-            # This ensures the link remains in chat history
-            await query.message.reply_text(
-                f"🎉 Супер! Ловите ссылку на это объявление: {listing_url}\n\n"
-                f"Теперь я буду показывать вам похожие обьявления."
-            )
-            
-            # Then ask if they want to continue viewing
-            await query.edit_message_text(
-                f"Продолжим просмотр?",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✨ Да, показать еще", callback_data="show_more")],
-                    [InlineKeyboardButton("❌ Отменить поиск", callback_data="stop")]
-                ])
-            )
-            
-            return VIEWING_LISTINGS
-    
-    elif user_response == "show_more":
-        # Reset dislike counter when explicitly requesting more listings
-        context.user_data['dislike_counter'] = 0
-        # Show another listing (will be from preferred cluster if available)
-        return await show_listing(update, context)
-    
-    # Default: continue showing listings
+    # Default action - show next listing
     return await show_listing(update, context)
 
-# ---- Price Estimation Functions ----
-
-async def estimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+# Price estimation conversation handlers
+async def start_price_estimation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start the price estimation process"""
-    # Clear any previous user data for estimation
-    if 'estimation_data' in context.user_data:
-        context.user_data['estimation_data'] = {}
-    else:
-        context.user_data['estimation_data'] = {}
+    # Reset estimation data
+    context.user_data.clear()
     
-    # Start by asking for floor number
-    message = await update.message.reply_text(
-        "💰 Давайте оценим примерную стоимость аренды вашей квартиры!\n\n"
-        "Для начала, укажите этаж квартиры (например, 5):\n\n"
-        "Чтобы отменить оценку, нажмите /cancel"
+    await update.message.reply_text(
+        "💰 Давайте оценим стоимость аренды вашей квартиры!\n\n"
+        "Для точной оценки мне нужно задать несколько вопросов.\n\n"
+        "Для начала, укажите этаж квартиры:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("❌ Отменить", callback_data="stop")]
+        ])
     )
-    
-    # Store the message ID for potential cancellation
-    context.user_data['current_message_id'] = message.message_id
     
     return FLOOR_INPUT
 
-# Add a cancel handler for text commands during estimation
-async def cancel_estimation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Cancel the estimation process"""
-    await update.message.reply_text(
-        "✅ Оценка стоимости отменена. Вы можете использовать команды:\n"
-        "/seerent - для поиска квартир\n"
-        "/estimate - для оценки стоимости\n"
-        "/help - для получения справки"
-    )
-    return ConversationHandler.END
-
-async def floor_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle floor input and ask for total floors"""
+async def process_floor(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Process floor input and ask for total floors"""
+    # Check if this is a callback query (from stop button)
+    if update.callback_query:
+        query = update.callback_query
+        if query.data == "stop":
+            return await handle_stop(update, context)
+    
     try:
         floor = int(update.message.text.strip())
         if floor <= 0:
-            await update.message.reply_text("Этаж должен быть положительным числом. Попробуйте снова:")
+            await update.message.reply_text(
+                "Этаж должен быть положительным числом. Пожалуйста, введите корректное значение:"
+            )
             return FLOOR_INPUT
         
-        # Store the floor in user data
-        context.user_data['estimation_data']['floor'] = floor
+        context.user_data['floor'] = floor
         
-        # Ask for total floors
         await update.message.reply_text(
-            f"Вы указали {floor} этаж.\n"
-            f"Теперь укажите общее количество этажей в доме (например, 9):\n\n"
-            f"Чтобы отменить оценку, нажмите /cancel"
+            f"Отлично! Теперь укажите общее количество этажей в доме:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ Отменить", callback_data="stop")]
+            ])
         )
         return TOTAL_FLOORS_INPUT
-    
     except ValueError:
         await update.message.reply_text(
-            "Пожалуйста, введите корректное число для этажа (например, 5):"
+            "Пожалуйста, введите корректное числовое значение для этажа:"
         )
         return FLOOR_INPUT
 
-async def total_floors_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle total floors input and ask for area"""
+async def process_total_floors(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Process total floors input and ask for area"""
+    # Check if this is a callback query (from stop button)
+    if update.callback_query:
+        query = update.callback_query
+        if query.data == "stop":
+            return await handle_stop(update, context)
+    
     try:
         total_floors = int(update.message.text.strip())
         if total_floors <= 0:
-            await update.message.reply_text("Количество этажей должно быть положительным числом. Попробуйте снова:")
+            await update.message.reply_text(
+                "Общее количество этажей должно быть положительным числом. Пожалуйста, введите корректное значение:"
+            )
             return TOTAL_FLOORS_INPUT
         
-        floor = context.user_data['estimation_data']['floor']
+        floor = context.user_data.get('floor', 0)
         if floor > total_floors:
             await update.message.reply_text(
-                f"Этаж квартиры ({floor}) не может быть больше общего количества этажей ({total_floors}).\n"
+                f"Этаж квартиры ({floor}) не может быть больше общего количества этажей в доме. "
                 f"Пожалуйста, введите корректное значение:"
             )
             return TOTAL_FLOORS_INPUT
         
-        # Store the total floors in user data
-        context.user_data['estimation_data']['total_floors'] = total_floors
+        context.user_data['total_floors'] = total_floors
         
-        # Ask for area
         await update.message.reply_text(
-            f"Вы указали {total_floors} этажей всего.\n"
-            f"Теперь укажите площадь квартиры в квадратных метрах (например, 45.5):\n\n"
-            f"Чтобы отменить оценку, нажмите /cancel"
+            f"Теперь укажите общую площадь квартиры в квадратных метрах:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ Отменить", callback_data="stop")]
+            ])
         )
         return AREA_INPUT
-    
     except ValueError:
         await update.message.reply_text(
-            "Пожалуйста, введите корректное число для общего количества этажей (например, 9):"
+            "Пожалуйста, введите корректное числовое значение для общего количества этажей:"
         )
         return TOTAL_FLOORS_INPUT
 
-async def area_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle area input and ask for number of rooms"""
+async def process_area(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Process area input and ask for rooms"""
+    # Check if this is a callback query (from stop button)
+    if update.callback_query:
+        query = update.callback_query
+        if query.data == "stop":
+            return await handle_stop(update, context)
+    
     try:
-        area = float(update.message.text.strip())
+        area = float(update.message.text.strip().replace(',', '.'))
         if area <= 0:
-            await update.message.reply_text("Площадь должна быть положительным числом. Попробуйте снова:")
+            await update.message.reply_text(
+                "Площадь должна быть положительным числом. Пожалуйста, введите корректное значение:"
+            )
             return AREA_INPUT
         
-        # Store the area in user data
-        context.user_data['estimation_data']['area_sqm'] = area
+        context.user_data['area_sqm'] = area
         
-        # Ask for number of rooms
         await update.message.reply_text(
-            f"Вы указали площадь {area} м².\n"
-            f"Теперь укажите количество комнат (например, 2):\n\n"
-            f"Чтобы отменить оценку, нажмите /cancel"
+            f"Отлично! Теперь укажите количество комнат в квартире:",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❌ Отменить", callback_data="stop")]
+            ])
         )
         return ROOMS_INPUT
-    
     except ValueError:
         await update.message.reply_text(
-            "Пожалуйста, введите корректное число для площади (например, 45.5):"
+            "Пожалуйста, введите корректное числовое значение для площади:"
         )
         return AREA_INPUT
 
-async def rooms_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle rooms input and ask for bathroom type"""
+async def process_rooms(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Process rooms input and ask for bathroom type"""
+    # Check if this is a callback query (from stop button)
+    if update.callback_query:
+        query = update.callback_query
+        if query.data == "stop":
+            return await handle_stop(update, context)
+    
     try:
         rooms = int(update.message.text.strip())
         if rooms <= 0:
-            await update.message.reply_text("Количество комнат должно быть положительным числом. Попробуйте снова:")
+            await update.message.reply_text(
+                "Количество комнат должно быть положительным числом. Пожалуйста, введите корректное значение:"
+            )
             return ROOMS_INPUT
         
-        # Store the rooms in user data
-        context.user_data['estimation_data']['rooms'] = rooms
+        context.user_data['rooms'] = rooms
         
-        # Create keyboard for bathroom type selection
-        keyboard = [
-            [InlineKeyboardButton("2 санузла и более", callback_data="bathroom_0")],
-            [InlineKeyboardButton("Раздельный", callback_data="bathroom_2")],
-            [InlineKeyboardButton("Совмещенный", callback_data="bathroom_5")]
-        ]
+        # Create keyboard for bathroom selection
+        keyboard = []
+        for bathroom_name, code in BATHROOM_ENCODING.items():
+            keyboard.append([InlineKeyboardButton(bathroom_name, callback_data=f"bathroom_{code}")])
+        
+        # Add stop button
+        keyboard.append([InlineKeyboardButton("❌ Отменить", callback_data="stop")])
+        
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        # Ask for bathroom type
         await update.message.reply_text(
-            f"Вы указали {rooms} комнат(ы).\n"
-            f"Теперь выберите тип санузла:",
+            f"И последний вопрос - выберите тип санузла:",
             reply_markup=reply_markup
         )
         return BATHROOM_INPUT
-    
     except ValueError:
         await update.message.reply_text(
-            "Пожалуйста, введите корректное число для количества комнат (например, 2):"
+            "Пожалуйста, введите корректное числовое значение для количества комнат:"
         )
         return ROOMS_INPUT
 
-async def bathroom_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle bathroom type selection and provide price estimate"""
+async def process_bathroom(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Process bathroom selection and calculate price estimate"""
     query = update.callback_query
     await query.answer()
     
-    bathroom_code = int(query.data.split('_')[1])
+    if query.data == "stop":
+        return await handle_stop(update, context)
     
-    # Store the bathroom type in user data
-    context.user_data['estimation_data']['bathroom_code'] = bathroom_code
+    bathroom_code = int(query.data.split('_')[1])
+    context.user_data['bathroom_code'] = bathroom_code
     
     # Get all the inputs
-    floor = context.user_data['estimation_data']['floor']
-    total_floors = context.user_data['estimation_data']['total_floors']
-    area_sqm = context.user_data['estimation_data']['area_sqm']
-    rooms = context.user_data['estimation_data']['rooms']
+    floor = context.user_data.get('floor')
+    total_floors = context.user_data.get('total_floors')
+    area_sqm = context.user_data.get('area_sqm')
+    rooms = context.user_data.get('rooms')
     
-    # Get bathroom name for display
-    bathroom_name = BATHROOM_MAPPING.get(bathroom_code, "Неизвестно")
-    
-    # Estimate price
-    estimated_price = data_manager.estimate_price(floor, total_floors, area_sqm, rooms, bathroom_code)
-    
-    if estimated_price is None:
-        await query.edit_message_text(
-            "😔 К сожалению, не удалось оценить стоимость аренды с указанными параметрами.\n"
-            "Попробуйте еще раз с другими параметрами: /estimate"
-        )
-    else:
+    # Calculate price estimate
+    estimated_price = data_manager.estimate_price(
+        floor, total_floors, area_sqm, rooms, bathroom_code
+    )
+
+
+    if estimated_price is not None:
+
         # Format price with spaces for better readability
+        formatted_price = f"{estimated_price:,}".replace(',', ' ')
+        
+        # Create a ±10% price range
+        lower_price = int(estimated_price * 0.9)
+        upper_price = int(estimated_price * 1.1)
+        formatted_lower = f"{lower_price:,}".replace(',', ' ')
+        formatted_upper = f"{upper_price:,}".replace(',', ' ')
+        
+        # Format price with spaces
         price_str = f"{estimated_price:,}".replace(',', ' ')
         
-        # Calculate price range (±10%)
-        price_min = int(estimated_price * 0.9)
-        price_max = int(estimated_price * 1.1)
-        price_min_str = f"{price_min:,}".replace(',', ' ')
-        price_max_str = f"{price_max:,}".replace(',', ' ')
-        
-        # Create message with summary and estimation - removed the question about continuing to search
+        # Create message with all details
         message = (
-            "📊 <b>Результаты оценки стоимости аренды:</b>\n\n"
+            f"💰 <b>Оценка стоимости аренды</b>\n\n"
+            f"На основе предоставленных данных, ориентировочная стоимость аренды вашей квартиры составляет:\n\n"
+            f"<b>{price_str} тенге в месяц</b>\n\n"
+            f"<b>Возможный диапазон:</b> {formatted_lower} - {formatted_upper} тенге/месяц\n"
             f"<b>Параметры квартиры:</b>\n"
-            f"• Этаж: {floor}/{total_floors}\n"
-            f"• Площадь: {area_sqm} м²\n"
-            f"• Количество комнат: {rooms}\n"
-            f"• Санузел: {bathroom_name}\n\n"
-            f"<b>Ориентировочная стоимость аренды:</b>\n"
-            f"<b>{price_str} тенге</b> в месяц\n\n"
-            f"<i>Диапазон цен: {price_min_str} - {price_max_str} тенге</i>"
+            f"- Этаж: {floor}/{total_floors}\n"
+            f"- Площадь: {area_sqm} м²\n"
+            f"- Комнат: {rooms}\n"
+            f"- Санузел: {list(BATHROOM_ENCODING.keys())[list(BATHROOM_ENCODING.values()).index(bathroom_code)]}\n\n"
+            f"Хотите посмотреть актуальные предложения по аренде квартир?"
         )
         
-        # Offer only new estimation or exit - removed the search apartments option
         keyboard = [
-            [InlineKeyboardButton("🔄 Новая оценка", callback_data="new_estimate")],
-            [InlineKeyboardButton("❌ Завершить", callback_data="stop")]
+            [InlineKeyboardButton("🔍 Посмотреть предложения", callback_data="start_search")],
+            [InlineKeyboardButton("🏠 Вернуться в главное меню", callback_data="stop")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -760,76 +945,154 @@ async def bathroom_input(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             reply_markup=reply_markup,
             parse_mode='HTML'
         )
-    
-    return ConversationHandler.END
+        
+        return VIEWING_LISTINGS
+    else:
+        await query.edit_message_text(
+            "😕 К сожалению, не удалось оценить стоимость с указанными параметрами. "
+            "Попробуйте еще раз с другими параметрами."
+        )
+        return ConversationHandler.END
 
-async def handle_post_estimation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Handle user's choice after price estimation"""
+async def handle_start_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle transition from price estimation to listing search"""
     query = update.callback_query
     await query.answer()
     
-    user_choice = query.data
+    await query.edit_message_text("Отлично! Давайте найдем для вас подходящую квартиру.")
     
-    if user_choice == "new_estimate":
-        # Start a new estimation
-        await query.edit_message_text("🔄 Начинаем новую оценку стоимости...")
-        return await estimate_command(update, context)
+    return await show_district_selection(update, context)
+
+async def notification_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle notification settings"""
+    user_id = update.effective_user.id
     
-    elif user_choice == "stop":
-        # Stop the process
-        return await handle_stop(update, context)
+    if user_id in user_preferences and user_preferences[user_id].get('notification_scheduled', False):
+        # User has notifications enabled
+        keyboard = [
+            [InlineKeyboardButton("❌ Отключить уведомления", callback_data="disable_notifications")],
+            [InlineKeyboardButton("🔄 Изменить предпочтения", callback_data="change_preferences")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        district_code = user_preferences[user_id].get('district')
+        district_name = data_manager.get_district_name(district_code)
+        
+        await update.message.reply_text(
+            f"🔔 У вас включены уведомления о новых квартирах в районе {district_name.split('Алматы, ')[-1] if 'Алматы, ' in district_name else district_name}.\n\n"
+            f"Я буду периодически отправлять вам интересные варианты, соответствующие вашим предпочтениям.",
+            reply_markup=reply_markup
+        )
+    else:
+        # User does not have notifications enabled
+        keyboard = [
+            [InlineKeyboardButton("🔔 Включить уведомления", callback_data="enable_notifications")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            "📢 В данный момент уведомления о новых квартирах отключены.\n\n"
+            "Чтобы включить уведомления, сначала найдите понравившуюся квартиру через /seerent, "
+            "а затем нажмите '👍 Нравится'.",
+            reply_markup=reply_markup
+        )
+
+async def handle_notification_settings(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle notification settings buttons"""
+    query = update.callback_query
+    await query.answer()
     
-    return ConversationHandler.END
+    user_id = update.effective_user.id
+    
+    if query.data == "disable_notifications":
+        # Disable notifications
+        if user_id in user_preferences:
+            user_preferences[user_id]['notification_scheduled'] = False
+            
+            # Remove any pending jobs for this user
+            current_jobs = context.job_queue.get_jobs_by_name(f"notification_{user_id}")
+            for job in current_jobs:
+                job.schedule_removal()
+            
+            await query.edit_message_text(
+                "✅ Уведомления о новых квартирах отключены. "
+                "Вы можете включить их снова после поиска квартиры через /seerent"
+            )
+    
+    elif query.data == "enable_notifications":
+        await query.edit_message_text(
+            "Для включения уведомлений, найдите понравившуюся квартиру через /seerent, "
+            "а затем нажмите '👍 Нравится'. После этого вы начнете получать уведомления "
+            "о похожих квартирах."
+        )
+    
+    elif query.data == "change_preferences":
+        await query.edit_message_text(
+            "Для изменения предпочтений начните поиск квартиры заново с помощью команды /seerent"
+        )
 
 def main() -> None:
-    """Main function to run the bot"""
-    # Initialize the bot with token
-    application = ApplicationBuilder().token(TOKEN).build()
+    """Run the bot."""
+    # Create the Application and pass it your bot's token
+    app = ApplicationBuilder().token(TOKEN).build()
     
-    # Add conversation handler for apartment viewing
+    # Create conversation handler for rental viewing
     rental_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("seerent", seerent_command)],
+        entry_points=[
+            CommandHandler("seerent", seerent_command),
+            CommandHandler("start", start),
+            CallbackQueryHandler(handle_start_search, pattern="^start_search$")
+        ],
         states={
             DISTRICT_SELECT: [
-                CallbackQueryHandler(select_district, pattern=r"^district_\d+$"),
+                CallbackQueryHandler(select_district, pattern="^district_\d+$"),
                 CallbackQueryHandler(handle_stop, pattern="^stop$")
             ],
             VIEWING_LISTINGS: [
-                CallbackQueryHandler(handle_listing_response, pattern=r"^(like|dislike|show_more|change_district|stop)$")
+                CallbackQueryHandler(handle_listing_response, pattern="^(like|dislike|continue|change_district|stop|acknowledge_change)$")
+            ]
+        },
+        fallbacks=[CallbackQueryHandler(handle_stop, pattern="^stop$")]
+    )
+    
+    # Create conversation handler for price estimation
+    price_estimation_handler = ConversationHandler(
+        entry_points=[CommandHandler("estimate", start_price_estimation)],
+        states={
+            FLOOR_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_floor),
+                CallbackQueryHandler(handle_stop, pattern="^stop$")
+            ],
+            TOTAL_FLOORS_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_total_floors),
+                CallbackQueryHandler(handle_stop, pattern="^stop$")
+            ],
+            AREA_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_area),
+                CallbackQueryHandler(handle_stop, pattern="^stop$")
+            ],
+            ROOMS_INPUT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, process_rooms),
+                CallbackQueryHandler(handle_stop, pattern="^stop$")
+            ],
+            BATHROOM_INPUT: [
+                CallbackQueryHandler(process_bathroom, pattern="^bathroom_\d+$"),
+                CallbackQueryHandler(handle_stop, pattern="^stop$")
             ],
         },
-        fallbacks=[CommandHandler("cancel", handle_stop)]
-    )
-    
-    # Add conversation handler for price estimation
-    estimation_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("estimate", estimate_command)],
-        states={
-            FLOOR_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, floor_input)],
-            TOTAL_FLOORS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, total_floors_input)],
-            AREA_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, area_input)],
-            ROOMS_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, rooms_input)],
-            BATHROOM_INPUT: [CallbackQueryHandler(bathroom_input, pattern=r"^bathroom_\d+$")],
-        },
-        fallbacks=[CommandHandler("cancel", cancel_estimation)]
-    )
-    
-    # Add post-estimation handler
-    post_estimation_handler = CallbackQueryHandler(
-        handle_post_estimation, 
-        pattern=r"^(new_estimate|stop)$"  # Removed search_apartments option
+        fallbacks=[CallbackQueryHandler(handle_stop, pattern="^stop$")]
     )
     
     # Add handlers to the application
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(rental_conv_handler)
-    application.add_handler(estimation_conv_handler)
-    application.add_handler(post_estimation_handler)
+    app.add_handler(rental_conv_handler)
+    app.add_handler(price_estimation_handler)
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("notifications", notification_command))
+    app.add_handler(CallbackQueryHandler(handle_notification_settings, pattern="^(disable_notifications|enable_notifications|change_preferences)$"))
+    app.add_handler(CallbackQueryHandler(handle_continue_search, pattern="^continue_search$"))
     
-    # Start the bot
-    logger.info("Starting the bot...")
-    application.run_polling()
+    # Start polling
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
