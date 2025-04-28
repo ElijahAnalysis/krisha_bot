@@ -35,6 +35,8 @@ TOKEN = "your_token"
 # User preferences storage
 user_preferences = {}  # Will store user_id -> {district, preferred_cluster}
 
+user_favorites = {}  # Will store user_id -> [list of favorite listing ids]
+
 # Mapping dictionaries for categorical values (reverse mappings)
 BATHROOM_MAPPING = {0: '2 с/у и более', 1: 'неизвестно', 2: 'разделен', 3: 'разделен, совмещен', 
                    4: 'раздельный', 5: 'совмещен', 6: 'совмещенный'}
@@ -196,6 +198,22 @@ class DataManager:
             else:
                 logger.error("Failed to reload data and model")
 
+    def get_listing_by_id(self, listing_id):
+        """Get a specific listing by ID"""
+        self.check_and_reload()
+        
+        if self.data is None:
+            logger.error("No data available for listings")
+            return None
+        
+        # Find the listing with the given ID
+        matching_listings = self.data[self.data['id'] == listing_id]
+        
+        if len(matching_listings) == 0:
+            return None
+        
+        return matching_listings.iloc[0]
+
     
     def get_random_listing_from_district(self, district_code, preferred_cluster=None):
         """Get a random listing from the specified district and optionally from preferred cluster"""
@@ -321,25 +339,35 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "📚 Доступные команды бота:\n\n"
         "🏠 /start - Познакомиться с ботом и узнать его возможности\n"
         "🔍 /seerent - Начать поиск квартир для аренды\n"
+        "⭐ Избранное - Доступно во время поиска квартир, сохраняет понравившиеся объявления\n"
         "💰 /estimate - Оценить стоимость аренды квартиры за 5 простых вопросов\n"
         "🔔 /notifications - Управление уведомлениями о новых предложениях\n"
         "❓ /help - Показать эту справку\n\n"
-        "\nБот запоминает ваши предпочтения и показывает похожие квартиры! 😉"
+        "\nБот запоминает ваши предпочтения, показывает похожие квартиры и сохраняет понравившиеся в избранное! 😉"
     )
 
 async def seerent_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Start the rental viewing process"""
     user = update.effective_user
+    user_id = user.id
     
     # Initialize user data
     context.user_data.clear()
     
-    await update.message.reply_text(
-        f"🔍 Отлично, {user.first_name}! Давайте найдем для вас идеальную квартиру в Алматы. "
-        f"\nВыберите район, в котором хотите искать квартиру:"
-    )
+    # Check if user has favorites
+    has_favorites = user_id in user_favorites and len(user_favorites[user_id]) > 0
+    
+    message = f"🔍 Класс, {user.first_name}! Давайте найдем для вас лучшую квартиру в Алматы."
+    
+    if has_favorites:
+        message += f"\n\nУ вас {len(user_favorites[user_id])} объявлений в избранном! Можно просмотреть их после выбора района."
+    
+    message += f"\n\nВыберите район, где хотите искать квартиру:"
+    
+    await update.message.reply_text(message)
     
     return await show_district_selection(update, context)
+    
 
 async def select_district(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handle district selection"""
@@ -431,15 +459,25 @@ async def show_listing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     unique_indicator = f"\n\n<i>Показано: {datetime.now().strftime('%H:%M:%S')}</i>"
     listing_text += unique_indicator
     
-    # Create keyboard with like/dislike buttons and stop button
+    # Check if user has any favorites to determine whether to show the favorites button
+    user_id = update.effective_user.id
+    has_favorites = user_id in user_favorites and len(user_favorites[user_id]) > 0
+    
+    # Create keyboard with like/dislike buttons and additional options
     keyboard = [
         [
             InlineKeyboardButton("👎 Не нравится", callback_data="dislike"),
-            InlineKeyboardButton("👍 Нравится, показать ссылку", callback_data="like")
-        ],
-        [InlineKeyboardButton("🔄 Изменить район", callback_data="change_district")],
-        [InlineKeyboardButton("❌ Отменить поиск", callback_data="stop")]
+            InlineKeyboardButton("👍 Нравится", callback_data="like")
+        ]
     ]
+    
+    # Add Favorites button if user has favorites
+    if has_favorites:
+        keyboard.append([InlineKeyboardButton("⭐ Избранное", callback_data="view_favorites")])
+    
+    keyboard.append([InlineKeyboardButton("🔄 Изменить район", callback_data="change_district")])
+    keyboard.append([InlineKeyboardButton("❌ Отменить поиск", callback_data="stop")])
+    
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     try:
@@ -466,6 +504,170 @@ async def show_listing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             )
     
     return VIEWING_LISTINGS
+    
+async def show_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Show user's favorite listings"""
+    query = update.callback_query
+    user_id = update.effective_user.id
+    
+    # Check if user has favorites
+    if user_id not in user_favorites or not user_favorites[user_id]:
+        await query.edit_message_text(
+            "У вас пока нет объявлений в избранном. Чтобы добавить объявление в избранное, "
+            "нажмите кнопку '👍 Нравится' при просмотре объявлений.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔍 Продолжить поиск", callback_data="continue")],
+                [InlineKeyboardButton("❌ Отменить поиск", callback_data="stop")]
+            ])
+        )
+        return VIEWING_LISTINGS
+    
+    # Get the current page of favorites
+    current_page = context.user_data.get('favorites_page', 0)
+    favorites_per_page = 1
+    total_favorites = len(user_favorites[user_id])
+    
+    # Calculate max pages
+    max_pages = (total_favorites - 1) // favorites_per_page + 1
+    
+    # Ensure current page is valid
+    if current_page >= max_pages:
+        current_page = 0
+    context.user_data['favorites_page'] = current_page
+    
+    # Get the current favorite listing ID
+    start_idx = current_page * favorites_per_page
+    end_idx = min(start_idx + favorites_per_page, total_favorites)
+    current_favorites = user_favorites[user_id][start_idx:end_idx]
+    
+    if not current_favorites:
+        await query.edit_message_text(
+            "Произошла ошибка при загрузке избранного.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔍 Продолжить поиск", callback_data="continue")],
+                [InlineKeyboardButton("❌ Отменить поиск", callback_data="stop")]
+            ])
+        )
+        return VIEWING_LISTINGS
+    
+    # Get the listing details for the current favorite
+    listing_id = current_favorites[0]
+    listing = data_manager.get_listing_by_id(listing_id)
+    
+    if listing is None:
+        # Listing not found (might have been removed from dataset)
+        # Remove from favorites
+        user_favorites[user_id].remove(listing_id)
+        
+        await query.edit_message_text(
+            "Это объявление больше не доступно и было удалено из избранного.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Назад к избранному", callback_data="view_favorites")],
+                [InlineKeyboardButton("🔍 Продолжить поиск", callback_data="continue")],
+                [InlineKeyboardButton("❌ Отменить поиск", callback_data="stop")]
+            ])
+        )
+        return VIEWING_LISTINGS
+    
+    # Format the listing details
+    listing_text = format_listing_details(listing)
+    
+    # Add favorite indicator and pagination info
+    listing_text += f"\n\n<i>Избранное: {current_page + 1}/{max_pages}</i>"
+    
+    # Create keyboard with pagination and action buttons
+    keyboard = []
+    pagination_buttons = []
+    
+    if total_favorites > 1:
+        if current_page > 0:
+            pagination_buttons.append(InlineKeyboardButton("⬅️", callback_data="prev_favorite"))
+        
+        if current_page < max_pages - 1:
+            pagination_buttons.append(InlineKeyboardButton("➡️", callback_data="next_favorite"))
+    
+    if pagination_buttons:
+        keyboard.append(pagination_buttons)
+    
+    # Add link button if URL is available
+    if 'url' in listing and listing['url']:
+        keyboard.append([InlineKeyboardButton("🔗 Перейти к объявлению", url=listing['url'])])
+    
+    # Add remove from favorites button
+    keyboard.append([InlineKeyboardButton("❌ Удалить из избранного", callback_data=f"remove_favorite_{listing_id}")])
+    
+    # Add navigation buttons
+    keyboard.append([InlineKeyboardButton("🔍 Продолжить поиск", callback_data="continue")])
+    keyboard.append([InlineKeyboardButton("❌ Отменить поиск", callback_data="stop")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        text=listing_text,
+        reply_markup=reply_markup,
+        parse_mode='HTML'
+    )
+    
+    return VIEWING_LISTINGS
+
+
+async def handle_favorites_actions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Handle actions related to favorites (pagination, removal)"""
+    query = update.callback_query
+    await query.answer()
+    user_id = update.effective_user.id
+    
+    action = query.data
+    
+    if action == "prev_favorite":
+        # Go to previous favorite
+        current_page = context.user_data.get('favorites_page', 0)
+        context.user_data['favorites_page'] = max(0, current_page - 1)
+        return await show_favorites(update, context)
+    
+    elif action == "next_favorite":
+        # Go to next favorite
+        current_page = context.user_data.get('favorites_page', 0)
+        total_favorites = len(user_favorites.get(user_id, []))
+        favorites_per_page = 1
+        max_pages = (total_favorites - 1) // favorites_per_page + 1
+        
+        context.user_data['favorites_page'] = min(current_page + 1, max_pages - 1)
+        return await show_favorites(update, context)
+    
+    elif action.startswith("remove_favorite_"):
+        # Remove listing from favorites
+        listing_id = int(action.split("_")[-1])
+        
+        if user_id in user_favorites and listing_id in user_favorites[user_id]:
+            user_favorites[user_id].remove(listing_id)
+            logger.info(f"Removed listing {listing_id} from favorites for user {user_id}")
+        
+        # Check if there are still favorites left
+        if user_id not in user_favorites or not user_favorites[user_id]:
+            await query.edit_message_text(
+                "Объявление удалено из избранного. У вас больше нет объявлений в избранном.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔍 Продолжить поиск", callback_data="continue")],
+                    [InlineKeyboardButton("❌ Отменить поиск", callback_data="stop")]
+                ])
+            )
+            return VIEWING_LISTINGS
+        
+        # Reset page if needed
+        total_favorites = len(user_favorites[user_id])
+        current_page = context.user_data.get('favorites_page', 0)
+        favorites_per_page = 1
+        max_pages = (total_favorites - 1) // favorites_per_page + 1
+        
+        if current_page >= max_pages:
+            context.user_data['favorites_page'] = max_pages - 1
+        
+        # Show updated favorites
+        return await show_favorites(update, context)
+    
+    return VIEWING_LISTINGS
+
 
 # New function to schedule notifications
 async def schedule_listing_notification(context: ContextTypes.DEFAULT_TYPE, user_id, district_code, cluster):
@@ -644,6 +846,10 @@ async def handle_listing_response(update: Update, context: ContextTypes.DEFAULT_
         context.user_data['dislike_counter'] = 0
         return await show_district_selection(update, context)
     
+    elif user_response == "view_favorites":
+        # User wants to view their favorite listings
+        return await show_favorites(update, context)
+    
     elif user_response == "dislike":
         # User didn't like this listing
         # Increment dislike counter
@@ -672,6 +878,16 @@ async def handle_listing_response(update: Update, context: ContextTypes.DEFAULT_
         # Store their preference
         if 'current_listing' in context.user_data:
             current_listing = context.user_data['current_listing']
+            
+            # Save to favorites
+            if 'id' in current_listing:
+                listing_id = current_listing['id']
+                if user_id not in user_favorites:
+                    user_favorites[user_id] = []
+                if listing_id not in user_favorites[user_id]:
+                    user_favorites[user_id].append(listing_id)
+                    logger.info(f"Added listing {listing_id} to favorites for user {user_id}")
+            
             if 'cluster' in current_listing:
                 # Store the preferred cluster for this user
                 preferred_cluster = current_listing['cluster']
@@ -701,12 +917,13 @@ async def handle_listing_response(update: Update, context: ContextTypes.DEFAULT_
                 keyboard = [
                     [InlineKeyboardButton("🔗 Перейти к объявлению", url=current_listing['url'])],
                     [InlineKeyboardButton("🔍 Продолжить поиск", callback_data="continue")],
+                    [InlineKeyboardButton("⭐ Избранное", callback_data="view_favorites")],
                     [InlineKeyboardButton("❌ Завершить поиск", callback_data="stop")]
                 ]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 await query.edit_message_text(
-                    "👍 Отлично! Вот ссылка на это объявление:",
+                    "👍 Отлично! Объявление добавлено в избранное. Вот ссылка на это объявление:",
                     reply_markup=reply_markup
                 )
                 return VIEWING_LISTINGS
@@ -715,6 +932,7 @@ async def handle_listing_response(update: Update, context: ContextTypes.DEFAULT_
                     "😕 К сожалению, у этого объявления нет доступной ссылки. Хотите продолжить поиск?",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("🔍 Продолжить поиск", callback_data="continue")],
+                        [InlineKeyboardButton("⭐ Избранное", callback_data="view_favorites")],
                         [InlineKeyboardButton("❌ Завершить поиск", callback_data="stop")]
                     ])
                 )
@@ -1050,7 +1268,7 @@ def main() -> None:
                 CallbackQueryHandler(handle_stop, pattern="^stop$")
             ],
             VIEWING_LISTINGS: [
-                CallbackQueryHandler(handle_listing_response, pattern="^(like|dislike|continue|change_district|stop|acknowledge_change)$")
+                CallbackQueryHandler(handle_listing_response, pattern="^(like|dislike|continue|change_district|stop|acknowledge_change|view_favorites)$")
             ]
         },
         fallbacks=[CallbackQueryHandler(handle_stop, pattern="^stop$")]
@@ -1091,6 +1309,8 @@ def main() -> None:
     app.add_handler(CommandHandler("notifications", notification_command))
     app.add_handler(CallbackQueryHandler(handle_notification_settings, pattern="^(disable_notifications|enable_notifications|change_preferences)$"))
     app.add_handler(CallbackQueryHandler(handle_continue_search, pattern="^continue_search$"))
+    # Add handler for favorites actions
+    app.add_handler(CallbackQueryHandler(handle_favorites_actions, pattern="^(prev_favorite|next_favorite|remove_favorite_\d+)$"))
     
     # Start polling
     app.run_polling(allowed_updates=Update.ALL_TYPES)
