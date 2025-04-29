@@ -472,7 +472,7 @@ async def show_listing(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     
     # Add Favorites button if user has favorites
     if has_favorites:
-        keyboard.append([InlineKeyboardButton("⭐ Избранное", callback_data="view_favorites")])
+        keyboard.append([InlineKeyboardButton("⭐ Зайти В Избранное", callback_data="view_favorites")])
     
     keyboard.append([InlineKeyboardButton("🔄 Изменить район", callback_data="change_district")])
     keyboard.append([InlineKeyboardButton("❌ Отменить поиск", callback_data="stop")])
