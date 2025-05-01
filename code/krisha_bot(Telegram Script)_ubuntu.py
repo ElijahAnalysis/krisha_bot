@@ -135,6 +135,9 @@ class DataManager:
         self.model = None
         self.price_model = None
         self.last_loaded = None
+        # Initialize a lock for thread safety
+        self.reload_lock = threading.Lock()
+        # Attempt to load data and model, but don't fail if it doesn't work initially
         self.load_data_and_model()
     
     def load_data_and_model(self):
@@ -152,22 +155,41 @@ class DataManager:
             if not os.path.exists(PRICE_MODEL_PATH):
                 logger.error(f"Price model file not found at: {PRICE_MODEL_PATH}")
                 return False
-                
-            self.data = pd.read_csv(DATA_PATH)
+            
+            # Load data into a temporary variable first
+            temp_data = pd.read_csv(DATA_PATH)
             
             # Add unique IDs to listings if they don't have them
-            if 'id' not in self.data.columns:
-                self.data['id'] = range(1, len(self.data) + 1)
-                
-            self.model = joblib.load(MODEL_PATH)
-            self.price_model = joblib.load(PRICE_MODEL_PATH)
-            self.last_loaded = datetime.now()
+            if 'id' not in temp_data.columns:
+                temp_data['id'] = range(1, len(temp_data) + 1)
             
-            # Assign clusters to listings
-            input_features = self.data[['floor', 'total_floors', 'area_sqm', 'rooms', 'price',
-                                      'full_address_code', 'furniture_code', 'parking_code', 
-                                      'security_code', 'bathroom_code']]
-            self.data['cluster'] = self.model.predict(input_features)
+            # Load models into temporary variables
+            temp_model = joblib.load(MODEL_PATH)
+            temp_price_model = joblib.load(PRICE_MODEL_PATH)
+            
+            # Verify that required columns exist in the dataset
+            required_columns = ['floor', 'total_floors', 'area_sqm', 'rooms', 'price',
+                              'full_address_code', 'furniture_code', 'parking_code', 
+                              'security_code', 'bathroom_code']
+            
+            missing_columns = [col for col in required_columns if col not in temp_data.columns]
+            if missing_columns:
+                logger.error(f"Missing required columns in data: {missing_columns}")
+                return False
+            
+            # Try assigning clusters to validate the model compatibility
+            try:
+                input_features = temp_data[required_columns]
+                temp_data['cluster'] = temp_model.predict(input_features)
+            except Exception as e:
+                logger.error(f"Error assigning clusters: {e}")
+                return False
+            
+            # After all validations pass, assign to instance variables
+            self.data = temp_data
+            self.model = temp_model
+            self.price_model = temp_price_model
+            self.last_loaded = datetime.now()
             
             logger.info(f"Data loaded with {len(self.data)} listings and clusters assigned")
             return True
@@ -177,28 +199,48 @@ class DataManager:
     
     def check_and_reload(self):
         """Check if data needs to be reloaded (every 24 hours)"""
-        now = datetime.now()
+        # Don't attempt to reload if we're already in the middle of reloading
+        if not self.reload_lock.acquire(blocking=False):
+            logger.info("Reload already in progress, skipping")
+            return False
         
-        # Also reload at 7:00 AM as currently implemented
-        is_reload_time = now.hour == 7 and 0 <= now.minute < 5
-        
-        # Add a time-based check (reload if data is older than 24 hours)
-        time_to_reload = False
-        if self.last_loaded:
-            time_since_reload = now - self.last_loaded
-            time_to_reload = time_since_reload.total_seconds() > 86400  # 24 hours in seconds
-        
-        if is_reload_time or time_to_reload:
-            logger.info("Reloading data and model...")
-            success = self.load_data_and_model()
-            if success:
-                self.last_loaded = now
-                logger.info("Data and model successfully reloaded")
+        try:
+            now = datetime.now()
+            
+            # Extended reload window: 7:00 AM to 7:30 AM
+            is_reload_time = now.hour == 7 and 0 <= now.minute < 30
+            
+            # Add a time-based check (reload if data is older than 24 hours)
+            time_to_reload = False
+            if self.last_loaded:
+                time_since_reload = now - self.last_loaded
+                time_to_reload = time_since_reload.total_seconds() > 86400  # 24 hours in seconds
             else:
-                logger.error("Failed to reload data and model")
+                # If last_loaded is None, we should try to load
+                time_to_reload = True
+            
+            # Also reload if data is None (initial load failed)
+            if self.data is None or self.model is None or self.price_model is None:
+                logger.info("Missing data or models, attempting to reload...")
+                time_to_reload = True
+            
+            if is_reload_time or time_to_reload:
+                logger.info("Reloading data and model...")
+                success = self.load_data_and_model()
+                if success:
+                    logger.info("Data and model successfully reloaded")
+                    return True
+                else:
+                    logger.error("Failed to reload data and model")
+                    return False
+            return True  # No reload needed
+        finally:
+            # Always release the lock
+            self.reload_lock.release()
 
     def get_listing_by_id(self, listing_id):
         """Get a specific listing by ID"""
+        # Try to reload if necessary, but continue even if reload fails
         self.check_and_reload()
         
         if self.data is None:
@@ -216,6 +258,7 @@ class DataManager:
     
     def get_random_listing_from_district(self, district_code, preferred_cluster=None):
         """Get a random listing from the specified district and optionally from preferred cluster"""
+        # Try to reload if necessary, but continue even if reload fails
         self.check_and_reload()
         
         if self.data is None:
@@ -245,6 +288,9 @@ class DataManager:
     
     def estimate_price(self, floor, total_floors, area_sqm, rooms, bathroom_code):
         """Estimate price using the stacking model"""
+        # Try to reload if necessary, but continue even if reload fails
+        self.check_and_reload()
+        
         if self.price_model is None:
             logger.error("Price model not loaded")
             return None
@@ -261,6 +307,9 @@ class DataManager:
         except Exception as e:
             logger.error(f"Error estimating price: {e}")
             return None
+
+# Don't forget to add the missing import
+import threading
 
 # Initialize data manager
 data_manager = DataManager()
