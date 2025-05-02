@@ -1,0 +1,3 @@
+'floor', 'total_floors', 'area_sqm', 'rooms', 'price',
+       'full_address_code', 'furniture_code', 'parking_code', 'security_code',
+       'bathroom_code'
