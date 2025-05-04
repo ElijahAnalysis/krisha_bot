@@ -768,10 +768,18 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_data = bot.get_user_data(user_id)
     
-    if user_data.get('current_menu') == 'main':
+    # Check current menu/state
+    current_menu = user_data.get('current_menu')
+    
+    # Only process menu selections if we're in the main menu
+    # Do NOT redirect to main menu if in estimation process
+    if current_menu == 'main':
         return await main_menu_handler(update, context)
+    elif current_menu == 'estimate':
+        # Let the conversation handler manage the estimation process
+        return
     else:
-        # Return to main menu for any other text
+        # Default to main menu for other contexts
         return await start(update, context)
 
 
@@ -782,7 +790,7 @@ def main():
     krisha_bot = KrishaBot()
     
     # Create application
-    application = Application.builder().token("your_token").build()
+    application = Application.builder().token("7698630510:AAGxvYR_cSC2SIOWs3IJN7V3l8vdnD_4oEc").build()
     
     # Store the bot instance
     application.bot_data['krisha_bot'] = krisha_bot
