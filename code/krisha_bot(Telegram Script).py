@@ -790,7 +790,7 @@ def main():
     krisha_bot = KrishaBot()
     
     # Create application
-    application = Application.builder().token("7698630510:AAGxvYR_cSC2SIOWs3IJN7V3l8vdnD_4oEc").build()
+    application = Application.builder().token("your_token").build()
     
     # Store the bot instance
     application.bot_data['krisha_bot'] = krisha_bot
