@@ -1,8 +1,13 @@
 import pandas as pd
+from joblib import load
 
-# Load the data
+# Load the data and model
 file_path = r"C:\Users\User\Desktop\DATA SCIENCE\Github\krisha_bot\data\regular_scrapping\scrapped\almaty_apartments.csv"
+clustering_model_path = r"C:\Users\User\Desktop\DATA SCIENCE\Github\krisha_bot\models\krisha_almaty_rental_kmeans29_pipeline.joblib"
+
 krisha_almaty_rental = pd.read_csv(file_path)
+clustering_model = load(clustering_model_path)
+
 
 # Delete rows with missing values in floor and total_floors
 krisha_almaty_rental = krisha_almaty_rental.dropna(subset=['floor', 'total_floors'])
@@ -48,16 +53,22 @@ krisha_almaty_rental['parking_code'] = krisha_almaty_rental['parking'].map(encod
 krisha_almaty_rental['security_code'] = krisha_almaty_rental['security'].map(encoding_mappings['security'])
 krisha_almaty_rental['bathroom_code'] = krisha_almaty_rental['bathroom'].map(encoding_mappings['bathroom'])
 
+krisha_almaty_rental['cluster'] = clustering_model.predict(krisha_almaty_rental[['floor','total_floors''area_sqm',
+                                                                                 'rooms','price','full_address_code',
+                                                                                 'furniture_code', 'parking_code','security_code',
+                                                                                 'bathroom_code']])
+
 # Keep only selected columns in the specified order
 columns_to_keep = ['floor', 'total_floors', 'area_sqm', 'rooms', 'price',
                    'full_address_code', 'furniture_code', 'parking_code', 'security_code',
-                   'bathroom_code','contact_name','title','url']
+                   'bathroom_code', 'contact_name', 'title', 'url', 'id', 'cluster']
+
 
 krisha_almaty_rental = krisha_almaty_rental[columns_to_keep]
 krisha_almaty_rental = krisha_almaty_rental.dropna()
 
 # Save the cleaned dataset
-output_path = r"C:\Users\User\Desktop\DATA SCIENCE\Github\krisha_bot\data\regular_scrapping\cleaned\almaty_apartments_cleaned.csv"
+output_path = r"C:\Users\User\Desktop\DATA SCIENCE\Github\krisha_bot\data\regular_scrapping\cleaned\almaty_apartments_clustered.csv"
 krisha_almaty_rental.to_csv(output_path, index=False)
 
 print(f"Data cleaning completed. Cleaned dataset saved to {output_path}")
