@@ -86,6 +86,23 @@ class KrishaBot:
         
         # Start data refresh thread
         self.start_data_refresh_thread()
+
+        # Calculate average prices by district and room count
+        self.calculate_average_prices()
+
+    def calculate_average_prices(self):
+        """Calculate average prices by district and room count"""
+        # Group by district code and room count, then calculate average price
+        self.avg_prices = self.df.groupby(['full_address_code', 'rooms'])['price'].mean().reset_index()
+        logging.info(f"Average prices calculated for {len(self.avg_prices)} district-room combinations")
+    
+    def get_average_price(self, district_code, rooms):
+        """Get average price for a specific district and room count"""
+        filtered = self.avg_prices[(self.avg_prices['full_address_code'] == district_code) & 
+                                  (self.avg_prices['rooms'] == rooms)]
+        if len(filtered) > 0:
+            return filtered.iloc[0]['price']
+        return None
         
     def get_user_data(self, user_id):
         """Initialize or get user data"""
@@ -110,6 +127,8 @@ class KrishaBot:
                 try:
                     # Reload the data
                     self.df = pd.read_csv(DATA_PATH)
+                    # Recalculate average prices
+                    self.calculate_average_prices()
                     self.last_data_refresh = datetime.now()
                     logging.info(f"Data refreshed successfully at {self.last_data_refresh}")
                 except Exception as e:
@@ -386,16 +405,31 @@ async def show_listing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Get image for the listing
     image_path = bot.get_image_path(listing['id'])
     
+    # Get price comparison info
+    price_comparison = ""
+    listing_price = listing['price']
+    avg_price = bot.get_average_price(listing['full_address_code'], listing['rooms'])
+    
+    if avg_price and listing_price < avg_price:
+        savings_percent = round(((avg_price - listing_price) / avg_price) * 100, 1)
+        price_comparison = f"🔥 Дешевле на {savings_percent}% чем средняя цена для {int(listing['rooms'])}-комнатных квартир в этом районе!"
+    
     # Create listing details message
+    base_details = f"🏠 {listing['title']}\n\n💰 Цена: {listing['price']:,} тг/месяц\n"
+    
+    
+    
     details = (
-        f"🏠 {listing['title']}\n\n"
-        f"💰 Цена: {listing['price']:,} тг/месяц\n"
+        base_details +
         f"🛏️ Комнат: {int(listing['rooms'])}\n"
         f"📏 Площадь: {listing['area_sqm']} м²\n"
         f"🏢 Этаж: {int(listing['floor'])}/{int(listing['total_floors'])}\n"
         f"🚿 Санузел: {BATHROOM_MAPPING.get(listing['bathroom_code'], 'неизвестно')}\n"
         f"🔗 Ссылка: {listing['url']}"
     )
+
+    if price_comparison:
+        details += f"\n{price_comparison}\n"
     
     # Create keyboard
     keyboard = [
