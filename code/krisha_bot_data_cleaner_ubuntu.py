@@ -53,7 +53,8 @@ krisha_almaty_rental['parking_code'] = krisha_almaty_rental['parking'].map(encod
 krisha_almaty_rental['security_code'] = krisha_almaty_rental['security'].map(encoding_mappings['security'])
 krisha_almaty_rental['bathroom_code'] = krisha_almaty_rental['bathroom'].map(encoding_mappings['bathroom'])
 
-krisha_almaty_rental['cluster'] = clustering_model.predict(krisha_almaty_rental[['floor','total_floors''area_sqm',
+krisha_almaty_rental = krisha_almaty_rental.dropna()
+krisha_almaty_rental['cluster'] = clustering_model.predict(krisha_almaty_rental[['floor','total_floors','area_sqm',
                                                                                  'rooms','price','full_address_code',
                                                                                  'furniture_code', 'parking_code','security_code',
                                                                                  'bathroom_code']])
