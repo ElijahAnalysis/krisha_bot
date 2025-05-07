@@ -418,7 +418,6 @@ async def show_listing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     base_details = f"🏠 {listing['title']}\n\n💰 Цена: {listing['price']:,} тг/месяц\n"
     
     
-    
     details = (
         base_details +
         f"🛏️ Комнат: {int(listing['rooms'])}\n"
@@ -604,7 +603,6 @@ async def remove_favorite_callback(update: Update, context: ContextTypes.DEFAULT
         # Delete the message with the removed favorite
         await query.message.delete()
 
-# Price estimation handlers
 async def estimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start price estimation process"""
     bot = context.bot_data.get('krisha_bot')
@@ -621,7 +619,8 @@ async def estimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text(
         "Давайте оценим стоимость аренды квартиры. Ответьте на несколько вопросов.\n\n"
-        "Введите этаж:",
+        "Введите этаж:\n\n"
+        "(нажмите «Отмена» для возврата в меню)",
         reply_markup=reply_markup
     )
     
@@ -629,75 +628,139 @@ async def estimate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def price_estimation_floor(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle floor input for price estimation"""
+    if update.message.text == "Отмена":
+        return await cancel(update, context)
+        
     bot = context.bot_data.get('krisha_bot')
     user_id = update.effective_user.id
     user_data = bot.get_user_data(user_id)
     
+    # Create cancel button
+    keyboard = [[KeyboardButton("Отмена")]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
     try:
         floor = int(update.message.text)
         if floor <= 0:
-            await update.message.reply_text("Этаж должен быть положительным числом. Пожалуйста, введите еще раз:")
+            await update.message.reply_text(
+                "Этаж должен быть положительным числом. Пожалуйста, введите еще раз:\n\n"
+                "(нажмите «Отмена» для возврата в меню)",
+                reply_markup=reply_markup
+            )
             return PRICE_ESTIMATION_FLOOR
             
         user_data['price_estimation']['floor'] = floor
         
-        await update.message.reply_text("Введите общее количество этажей в доме:")
+        await update.message.reply_text(
+            "Введите общее количество этажей в доме:\n\n"
+            "(нажмите «Отмена» для возврата в меню)",
+            reply_markup=reply_markup
+        )
         return PRICE_ESTIMATION_TOTAL_FLOORS
         
     except ValueError:
-        await update.message.reply_text("Пожалуйста, введите число. Попробуйте еще раз:")
+        await update.message.reply_text(
+            "Пожалуйста, введите число. Попробуйте еще раз:\n\n"
+            "(нажмите «Отмена» для возврата в меню)",
+            reply_markup=reply_markup
+        )
         return PRICE_ESTIMATION_FLOOR
 
 async def price_estimation_total_floors(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle total floors input for price estimation"""
+    if update.message.text == "Отмена":
+        return await cancel(update, context)
+        
     bot = context.bot_data.get('krisha_bot')
     user_id = update.effective_user.id
     user_data = bot.get_user_data(user_id)
+    
+    # Create cancel button
+    keyboard = [[KeyboardButton("Отмена")]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     
     try:
         total_floors = int(update.message.text)
         floor = user_data['price_estimation']['floor']
         
         if total_floors <= 0:
-            await update.message.reply_text("Общее количество этажей должно быть положительным числом. Пожалуйста, введите еще раз:")
+            await update.message.reply_text(
+                "Общее количество этажей должно быть положительным числом. Пожалуйста, введите еще раз:\n\n"
+                "(нажмите «Отмена» для возврата в меню)",
+                reply_markup=reply_markup
+            )
             return PRICE_ESTIMATION_TOTAL_FLOORS
             
         if floor > total_floors:
-            await update.message.reply_text(f"Этаж ({floor}) не может быть больше общего количества этажей. Пожалуйста, введите корректное значение:")
+            await update.message.reply_text(
+                f"Этаж ({floor}) не может быть больше общего количества этажей. Пожалуйста, введите корректное значение:\n\n"
+                "(нажмите «Отмена» для возврата в меню)",
+                reply_markup=reply_markup
+            )
             return PRICE_ESTIMATION_TOTAL_FLOORS
             
         user_data['price_estimation']['total_floors'] = total_floors
         
-        await update.message.reply_text("Введите площадь квартиры (в квадратных метрах):")
+        await update.message.reply_text(
+            "Введите площадь квартиры (в квадратных метрах):\n\n"
+            "(нажмите «Отмена» для возврата в меню)",
+            reply_markup=reply_markup
+        )
         return PRICE_ESTIMATION_AREA
         
     except ValueError:
-        await update.message.reply_text("Пожалуйста, введите число. Попробуйте еще раз:")
+        await update.message.reply_text(
+            "Пожалуйста, введите число. Попробуйте еще раз:\n\n"
+            "(нажмите «Отмена» для возврата в меню)",
+            reply_markup=reply_markup
+        )
         return PRICE_ESTIMATION_TOTAL_FLOORS
 
 async def price_estimation_area(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle area input for price estimation"""
+    if update.message.text == "Отмена":
+        return await cancel(update, context)
+        
     bot = context.bot_data.get('krisha_bot')
     user_id = update.effective_user.id
     user_data = bot.get_user_data(user_id)
     
+    # Create cancel button
+    keyboard = [[KeyboardButton("Отмена")]]
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    
     try:
         area = float(update.message.text)
         if area <= 0:
-            await update.message.reply_text("Площадь должна быть положительным числом. Пожалуйста, введите еще раз:")
+            await update.message.reply_text(
+                "Площадь должна быть положительным числом. Пожалуйста, введите еще раз:\n\n"
+                "(нажмите «Отмена» для возврата в меню)",
+                reply_markup=reply_markup
+            )
             return PRICE_ESTIMATION_AREA
             
         user_data['price_estimation']['area_sqm'] = area
         
-        await update.message.reply_text("Введите количество комнат:")
+        await update.message.reply_text(
+            "Введите количество комнат:\n\n"
+            "(нажмите «Отмена» для возврата в меню)",
+            reply_markup=reply_markup
+        )
         return PRICE_ESTIMATION_ROOMS
         
     except ValueError:
-        await update.message.reply_text("Пожалуйста, введите число. Попробуйте еще раз:")
+        await update.message.reply_text(
+            "Пожалуйста, введите число. Попробуйте еще раз:\n\n"
+            "(нажмите «Отмена» для возврата в меню)",
+            reply_markup=reply_markup
+        )
         return PRICE_ESTIMATION_AREA
 
 async def price_estimation_rooms(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle rooms input for price estimation"""
+    if update.message.text == "Отмена":
+        return await cancel(update, context)
+        
     bot = context.bot_data.get('krisha_bot')
     user_id = update.effective_user.id
     user_data = bot.get_user_data(user_id)
@@ -705,7 +768,15 @@ async def price_estimation_rooms(update: Update, context: ContextTypes.DEFAULT_T
     try:
         rooms = int(update.message.text)
         if rooms <= 0:
-            await update.message.reply_text("Количество комнат должно быть положительным числом. Пожалуйста, введите еще раз:")
+            # Create cancel button
+            keyboard = [[KeyboardButton("Отмена")]]
+            reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+            
+            await update.message.reply_text(
+                "Количество комнат должно быть положительным числом. Пожалуйста, введите еще раз:\n\n"
+                "(нажмите «Отмена» для возврата в меню)",
+                reply_markup=reply_markup
+            )
             return PRICE_ESTIMATION_ROOMS
             
         user_data['price_estimation']['rooms'] = rooms
@@ -725,7 +796,15 @@ async def price_estimation_rooms(update: Update, context: ContextTypes.DEFAULT_T
         return PRICE_ESTIMATION_BATHROOM
         
     except ValueError:
-        await update.message.reply_text("Пожалуйста, введите число. Попробуйте еще раз:")
+        # Create cancel button
+        keyboard = [[KeyboardButton("Отмена")]]
+        reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        
+        await update.message.reply_text(
+            "Пожалуйста, введите число. Попробуйте еще раз:\n\n"
+            "(нажмите «Отмена» для возврата в меню)",
+            reply_markup=reply_markup
+        )
         return PRICE_ESTIMATION_ROOMS
 
 async def price_estimation_bathroom(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -772,9 +851,13 @@ async def price_estimation_bathroom(update: Update, context: ContextTypes.DEFAUL
     return MAIN_MENU
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    """canceling logic"""
-  
+    """Cancel and end the conversation"""
+    bot = context.bot_data.get('krisha_bot')
+    user_id = update.effective_user.id
+    user_data = bot.get_user_data(user_id)
+    
+    # Reset current menu state
+    user_data['current_menu'] = 'main'
     
     # Create main menu keyboard
     keyboard = [
@@ -793,7 +876,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle regular text messages"""
     text = update.message.text
     
-    # Handle "Cancel" message
+    # Handle "Cancel" message in any state
     if text == "Отмена":
         return await cancel(update, context)
     
@@ -805,16 +888,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check current menu/state
     current_menu = user_data.get('current_menu')
     
-    # Only process menu selections if we're in the main menu
-    # Do NOT redirect to main menu if in estimation process
     if current_menu == 'main':
         return await main_menu_handler(update, context)
-    elif current_menu == 'estimate':
-        # Let the conversation handler manage the estimation process
-        return
-    else:
-        # Default to main menu for other contexts
-        return await start(update, context)
+    # Other states are handled by the conversation handler
+    
+    return
 
 
 
@@ -845,22 +923,30 @@ def main():
                 CallbackQueryHandler(back_to_menu, pattern=r"^back_to_menu$")
             ],
             PRICE_ESTIMATION_FLOOR: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, price_estimation_floor)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex('^Отмена$'), price_estimation_floor),
+                MessageHandler(filters.Regex('^Отмена$'), cancel)
             ],
             PRICE_ESTIMATION_TOTAL_FLOORS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, price_estimation_total_floors)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex('^Отмена$'), price_estimation_total_floors),
+                MessageHandler(filters.Regex('^Отмена$'), cancel)
             ],
             PRICE_ESTIMATION_AREA: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, price_estimation_area)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex('^Отмена$'), price_estimation_area),
+                MessageHandler(filters.Regex('^Отмена$'), cancel)
             ],
             PRICE_ESTIMATION_ROOMS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, price_estimation_rooms)
+                MessageHandler(filters.TEXT & ~filters.COMMAND & ~filters.Regex('^Отмена$'), price_estimation_rooms),
+                MessageHandler(filters.Regex('^Отмена$'), cancel)
             ],
             PRICE_ESTIMATION_BATHROOM: [
                 CallbackQueryHandler(price_estimation_bathroom, pattern=r"^bathroom_")
+                # No need for cancel handler here as it's a callback query
             ],
         },
-        fallbacks=[CommandHandler('cancel', cancel)]
+        fallbacks=[
+            CommandHandler('cancel', cancel),
+            MessageHandler(filters.Regex('^Отмена$'), cancel)
+        ]
     )
     
     # Add handlers
