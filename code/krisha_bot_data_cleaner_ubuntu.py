@@ -3,7 +3,7 @@ from joblib import load
 
 # Load the data and model
 file_path = "/root/krisha_bot/data/regular_scrapping/scrapped/almaty_apartments.csv"
-clustering_model_path = "/root/krisha_bot/models/krisha_almaty_rental_kmeans29_pipeline.joblib"
+clustering_model_path = "/root/krisha_bot/models/krisha_almaty_rental_kmeans26_pipeline.joblib"
 
 krisha_almaty_rental = pd.read_csv(file_path)
 clustering_model = load(clustering_model_path)

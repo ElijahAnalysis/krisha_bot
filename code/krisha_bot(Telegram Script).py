@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # Path configurations
 DATA_PATH = r"C:\Users\User\Desktop\DATA SCIENCE\Github\krisha_bot\data\regular_scrapping\cleaned\almaty_apartments_clustered.csv"
-PRICE_MODEL_PATH = r"C:\Users\User\Desktop\DATA SCIENCE\Github\krisha_bot\models\krisha_almaty_rental_stacking.joblib"
+PRICE_MODEL_PATH = r"C:\Users\User\Desktop\DATA SCIENCE\Github\krisha_bot\models\krisha_almaty_rental_hgb500.joblib"
 IMAGES_DIR = r"C:\Users\User\Desktop\DATA SCIENCE\Github\krisha_bot\data\regular_scrapping\images\almaty_rental_images\images"
 
 # Mapping dictionaries
