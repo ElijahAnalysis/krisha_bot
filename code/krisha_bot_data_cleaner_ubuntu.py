@@ -266,7 +266,7 @@ if before_final_dropna != after_final_dropna:
     print(f'Final cleanup dropped {before_final_dropna - after_final_dropna} rows')
 
 # Step 8: Save the cleaned dataset
-output_path ="root/krisha_bot/data/regular_scrapping/cleaned/almaty_apartments_clustered.csv"
+output_path ="/root/krisha_bot/data/regular_scrapping/cleaned/almaty_apartments_clustered.csv"
 krisha_almaty_rental.to_csv(output_path, index=False)
 
 
